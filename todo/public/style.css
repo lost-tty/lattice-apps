@@ -1,0 +1,265 @@
+/* ============================================================================
+   Lattice Todo — Styles
+   ============================================================================ */
+
+/* --- Tokens (dark) --- */
+:root {
+  --bg:         oklch(0.15 0.01 270);
+  --bg1:        oklch(0.18 0.01 270);
+  --bg2:        oklch(0.22 0.01 270);
+  --bg3:        oklch(0.28 0.01 270);
+  --bg-hover:   oklch(0.20 0.01 270);
+  --fg:         oklch(0.90 0.01 270);
+  --fg1:        oklch(0.78 0.01 270);
+  --fg2:        oklch(0.60 0.02 270);
+  --fg3:        oklch(0.42 0.02 270);
+  --accent:     oklch(0.65 0.18 260);
+  --accent-dim: oklch(0.55 0.16 260);
+  --accent-bg:  oklch(0.65 0.18 260 / 0.08);
+  --danger:     oklch(0.65 0.22 25);
+  --ok:         oklch(0.65 0.16 145);
+  --radius:     4px;
+  --radius-lg:  6px;
+  --font:       system-ui, sans-serif;
+  --shadow:     0 2px 12px oklch(0 0 0 / 0.4);
+  --transition: 120ms ease;
+  color-scheme: dark light;
+}
+
+/* --- Tokens (light) --- */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg:         oklch(1.00 0 0);
+    --bg1:        oklch(0.97 0.005 270);
+    --bg2:        oklch(0.95 0.005 270);
+    --bg3:        oklch(0.90 0.01 270);
+    --bg-hover:   oklch(0.96 0.005 270);
+    --fg:         oklch(0.20 0.02 270);
+    --fg1:        oklch(0.35 0.02 270);
+    --fg2:        oklch(0.48 0.02 270);
+    --fg3:        oklch(0.65 0.02 270);
+    --accent:     oklch(0.55 0.18 260);
+    --accent-dim: oklch(0.48 0.16 260);
+    --accent-bg:  oklch(0.55 0.18 260 / 0.07);
+    --danger:     oklch(0.55 0.22 25);
+    --ok:         oklch(0.55 0.16 145);
+    --shadow:     0 2px 12px oklch(0 0 0 / 0.08);
+  }
+}
+
+/* --- Reset --- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: var(--accent); color: white; }
+:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+
+/* --- Loading / error --- */
+.app-loading, .app-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  color: var(--fg2);
+  font-size: 14px;
+}
+.app-error { color: var(--danger); }
+
+/* --- App layout --- */
+.todo-app {
+  max-width: 520px;
+  margin: 60px auto 40px;
+  padding: 0 16px;
+}
+
+.todo-title {
+  font-size: 32px;
+  font-weight: 200;
+  text-align: center;
+  color: var(--fg2);
+  margin-bottom: 20px;
+  letter-spacing: -0.02em;
+}
+
+.todo-panel {
+  background: var(--bg1);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+/* --- Input --- */
+.todo-input-wrap {
+  border-bottom: 1px solid var(--bg3);
+}
+
+.todo-input {
+  width: 100%;
+  padding: 14px 16px;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 15px;
+}
+.todo-input::placeholder { color: var(--fg3); }
+.todo-input:focus { outline: none; background: var(--bg2); }
+
+/* --- List --- */
+.todo-list {
+  list-style: none;
+}
+
+.todo-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--fg3);
+}
+
+/* --- Item --- */
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--bg2);
+  transition: background var(--transition);
+  cursor: grab;
+}
+.todo-item:last-child { border-bottom: none; }
+.todo-item:hover { background: var(--bg-hover); }
+.todo-item.dragging { opacity: 0.4; }
+
+.todo-item.editing {
+  padding: 0;
+}
+
+.todo-check {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--fg3);
+  font-size: 18px;
+  cursor: pointer;
+  border-radius: var(--radius);
+  transition: color var(--transition);
+}
+.todo-check:hover { color: var(--accent); }
+.todo-item.done .todo-check { color: var(--ok); }
+
+.todo-text {
+  flex: 1;
+  padding: 10px 0;
+  cursor: text;
+  word-break: break-word;
+}
+.todo-item.done .todo-text {
+  text-decoration: line-through;
+  color: var(--fg3);
+}
+
+.todo-remove {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--fg3);
+  font-size: 18px;
+  cursor: pointer;
+  border-radius: var(--radius);
+  opacity: 0;
+  transition: opacity var(--transition), color var(--transition);
+}
+.todo-item:hover .todo-remove { opacity: 1; }
+.todo-remove:hover { color: var(--danger); }
+
+.todo-edit {
+  width: 100%;
+  padding: 10px 16px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent);
+  border-radius: 0;
+  color: var(--fg);
+  font: inherit;
+  font-size: 15px;
+}
+.todo-edit:focus { outline: none; }
+
+/* --- Footer --- */
+.todo-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-top: 1px solid var(--bg2);
+  font-size: 12px;
+  color: var(--fg2);
+  gap: 8px;
+}
+
+.todo-count { white-space: nowrap; }
+
+.filter-group {
+  display: flex;
+  gap: 2px;
+}
+
+.filter-btn {
+  padding: 3px 8px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--fg2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.filter-btn:hover { border-color: var(--fg3); }
+.filter-btn.active {
+  border-color: var(--accent-dim);
+  color: var(--fg);
+}
+
+.clear-btn {
+  padding: 3px 8px;
+  background: none;
+  border: none;
+  color: var(--fg2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--transition);
+}
+.clear-btn:hover { color: var(--danger); }
+
+/* --- Hint --- */
+.todo-hint {
+  text-align: center;
+  margin-top: 16px;
+  font-size: 11px;
+  color: var(--fg3);
+}
+.todo-hint kbd {
+  padding: 1px 5px;
+  background: var(--bg2);
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 11px;
+}
