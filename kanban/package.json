@@ -1,0 +1,17 @@
+{
+  "name": "lattice-kanban",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "cp -r public/* dist/ && esbuild src/main.tsx --bundle --outfile=dist/bundle.js --format=iife --target=es2020 --minify --jsx=automatic --jsx-import-source=preact",
+    "watch": "cp -r public/* dist/ && esbuild src/main.tsx --bundle --outfile=dist/bundle.js --format=iife --target=es2020 --watch --jsx=automatic --jsx-import-source=preact",
+    "bundle": "npm run build && cd dist && zip -qr ../kanban.zip ."
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  },
+  "dependencies": {
+    "@preact/signals": "^2.8.2",
+    "preact": "^10.29.0"
+  }
+}

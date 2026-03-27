@@ -1,7 +1,7 @@
 // ============================================================================
 // Lattice Inventory — Main (Preact)
 //
-// Bootstrap: init LatticeSDK, load data, wire up UI + live sync.
+// Bootstrap: connect SDK, open store, load data, wire up UI + live sync.
 // ============================================================================
 
 import { render } from 'preact';
@@ -16,8 +16,10 @@ async function main() {
   app.innerHTML = '<div class="app-loading">Connecting to store...</div>';
 
   try {
-    // 1. Connect to the Lattice KV store
-    const store = await LatticeSDK.connect();
+    // 1. Connect SDK and open the KV store
+    const sdk = await LatticeSDK.connect();
+    window.SDK = sdk;
+    const store = await sdk.openAppStore();
 
     // 2. Initialize data layer
     const dataStore = new DataStore();

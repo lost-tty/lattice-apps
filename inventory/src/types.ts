@@ -2,26 +2,30 @@
 // Lattice Inventory — Type definitions
 // ============================================================================
 
-// --- Store interface (provided by LatticeSDK) ---
+// --- SDK + Store interfaces (provided by LatticeSDK) ---
 
 export interface Store {
   readonly storeId: string;
-  get(key: string): Promise<{ value: Uint8Array | null }>;
-  getJSON(key: string): Promise<{ value: unknown }>;
-  put(key: string, value: string | Uint8Array): Promise<void>;
-  putJSON(key: string, value: unknown): Promise<void>;
-  delete(key: string): Promise<void>;
-  list(prefix?: string): Promise<{ key: Uint8Array; value: Uint8Array }[]>;
-  watch(
-    prefix: string,
-    onEvent: (e: { key: Uint8Array; value: Uint8Array | null; deleted: boolean }) => void,
+  List(params: { prefix: Uint8Array }): Promise<any>;
+  Get(params: { key: Uint8Array }): Promise<{ value: Uint8Array | null }>;
+  Put(params: { key: Uint8Array; value: Uint8Array }): Promise<void>;
+  Delete(params: { key: Uint8Array }): Promise<void>;
+  subscribe(
+    stream: string,
+    params: { prefix: Uint8Array },
+    onEvent: (event: { key: Uint8Array; value: Uint8Array | null; deleted: boolean }) => void,
   ): () => void;
-  exportJSON(): Promise<{ entries: { key: string; value: unknown }[] }>;
-  importJSON(data: { entries: { key: string; value: unknown }[] }): Promise<number>;
 }
 
+export interface SDK {
+  openAppStore(): Promise<Store>;
+}
+
+type StatusCallback = (status: 'connecting' | 'connected' | 'disconnected' | 'error') => void;
+
 declare global {
-  const LatticeSDK: { connect(): Promise<Store> };
+  const LatticeSDK: { connect(opts?: { onStatus?: StatusCallback }): Promise<SDK> };
+  var SDK: SDK;
 }
 
 // --- Item ---

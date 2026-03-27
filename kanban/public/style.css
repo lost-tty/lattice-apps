@@ -1,0 +1,126 @@
+:root {
+  --bg: oklch(0.96 0.005 260);
+  --col-bg: oklch(0.92 0.005 260);
+  --col-drop: oklch(0.87 0.008 260);
+  --card-bg: oklch(1 0 0);
+  --card-shadow: oklch(0 0 0 / 0.08);
+  --text: oklch(0.2 0 0);
+  --text-muted: oklch(0.5 0 0);
+  --text-faint: oklch(0.65 0 0);
+  --text-hover: oklch(0.4 0 0);
+  --delete: oklch(0.8 0 0);
+  --delete-hover: oklch(0.6 0.2 25);
+  --font-sm: 12px;
+  --font: 14px;
+  --font-title: 20px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.board {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 32px 20px;
+}
+
+.board h1 {
+  font-size: var(--font-title);
+  margin-bottom: 20px;
+}
+
+.columns {
+  display: flex;
+  gap: 14px;
+}
+
+.column {
+  flex: 1;
+  background: var(--col-bg);
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.column.drop-over {
+  background: var(--col-drop);
+}
+
+.column-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 6px;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.column-header h2 {
+  flex: 1;
+  cursor: pointer;
+}
+
+.count {
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+.card {
+  background: var(--card-bg);
+  border-radius: 6px;
+  padding: 8px 10px;
+  box-shadow: 0 1px 2px var(--card-shadow);
+  cursor: grab;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--font);
+}
+
+.del {
+  all: unset;
+  cursor: pointer;
+  color: var(--delete);
+}
+
+.del:hover {
+  color: var(--delete-hover);
+}
+
+.add {
+  all: unset;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: var(--font);
+  padding: 6px 4px;
+}
+
+.add:hover {
+  color: var(--text-hover);
+}
+
+.add-col {
+  all: unset;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: var(--font);
+  padding: 10px;
+  white-space: nowrap;
+}
+
+.add-col:hover {
+  color: var(--text-hover);
+}
