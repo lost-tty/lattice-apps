@@ -1,0 +1,5 @@
+[app]
+id = "example:outliner"
+name = "Outliner"
+version = "0.1.0"
+store_type = "core:kvstore"

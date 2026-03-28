@@ -66,7 +66,6 @@ export function RowContextMenu() {
   const dismiss = useCallback(() => {
     contextMenu.value = null;
     setOpenSub(null);
-    setPos(null);
   }, []);
 
   const handleColor = useCallback(async (colorName: string | null) => {

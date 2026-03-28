@@ -1,0 +1,762 @@
+:root {
+  --bg: oklch(0.98 0.003 260);
+  --sidebar-bg: oklch(0.95 0.005 260);
+  --border: oklch(0.9 0.005 260);
+  --text: oklch(0.15 0 0);
+  --text-muted: oklch(0.5 0 0);
+  --text-faint: oklch(0.65 0 0);
+  --bullet: oklch(0.72 0 0);
+  --active-bg: oklch(0.96 0.01 250);
+  --link: oklch(0.5 0.15 250);
+  --link-bg: oklch(0.95 0.03 250);
+  --delete: oklch(0.75 0 0);
+  --delete-hover: oklch(0.6 0.2 25);
+  --drop-indicator: oklch(0.6 0.15 250);
+
+  /* Layout rhythm */
+  --bullet-size: 20px;
+  --indent: 24px;   /* per depth level; also equals --bullet-size + block gap */
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* --- Layout --- */
+
+.app {
+  display: flex;
+  height: 100vh;
+}
+
+/* --- Sidebar --- */
+
+.sidebar {
+  width: 240px;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
+  padding: 16px 12px;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.sidebar-section {
+  margin-bottom: 24px;
+}
+
+.sidebar-section h3 {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  padding: 0 8px;
+  margin-bottom: 6px;
+}
+
+.sidebar-item {
+  all: unset;
+  display: block;
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-item:hover {
+  background: var(--border);
+}
+
+.sidebar-item.active,
+.sidebar-item-row.active .sidebar-item {
+  background: var(--active-bg);
+  font-weight: 500;
+}
+
+.sidebar-item-row {
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+}
+
+.sidebar-item-row .sidebar-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-delete {
+  all: unset;
+  cursor: pointer;
+  color: var(--delete);
+  padding: 4px 6px;
+  font-size: 14px;
+  opacity: 0;
+}
+
+.sidebar-item-row:hover .sidebar-delete {
+  opacity: 1;
+}
+
+.sidebar-delete:hover {
+  color: var(--delete-hover);
+}
+
+.sidebar-add {
+  all: unset;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 13px;
+  padding: 5px 8px;
+  display: block;
+}
+
+.sidebar-add:hover {
+  color: var(--text-muted);
+}
+
+.sidebar-actions {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 6px;
+}
+
+.sidebar-action {
+  all: unset;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  justify-content: center;
+}
+
+.sidebar-action:hover {
+  color: var(--text-muted);
+  background: var(--border);
+}
+
+.sidebar-action svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Table rendering — CSS Grid, no <table> elements */
+.table-block {
+  padding-left: calc(var(--depth, 0) * var(--indent));
+  display: flex;
+  align-items: start;
+  gap: 0;
+}
+
+.table-grid {
+  display: grid;
+  font-size: inherit;
+  margin: 1.5rem 0 4px 1.5rem;
+}
+
+.table-cell {
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  padding: 4px 8px;
+  min-height: 1rem;
+  cursor: text;
+  position: relative;
+  overflow: visible;
+}
+
+.table-header-cell {
+  font-weight: 600;
+  background: var(--sidebar-bg);
+}
+
+/* Row handle — positioned left of the first cell in each row via negative margin */
+.row-handle {
+  position: absolute;
+  left: -1.25rem;
+  top: 0;
+  bottom: 0;
+  width: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  font-size: 10px;
+  user-select: none;
+  color: transparent;
+  border-radius: 3px;
+  transition: color 0.1s;
+}
+
+/* Col handle — positioned above header cells via negative margin */
+.col-handle {
+  position: absolute;
+  top: -1.25rem;
+  left: 0;
+  right: 0;
+  height: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  font-size: 10px;
+  user-select: none;
+  color: transparent;
+  border-radius: 3px;
+  transition: color 0.1s;
+}
+
+/* Reveal on hover — row handle when hovering any cell in that row */
+.table-cell:hover > .row-handle,
+.table-cell:hover > .col-handle {
+  color: var(--text-faint);
+}
+
+.row-handle:hover,
+.col-handle:hover {
+  color: var(--text-muted) !important;
+  background: var(--border);
+}
+
+/* Drop indicators on cells */
+.table-cell.drop-row-before { box-shadow: inset 0 2px 0 var(--drop-indicator); }
+.table-cell.drop-row-after  { box-shadow: inset 0 -2px 0 var(--drop-indicator); }
+.table-cell.drop-col-before { box-shadow: inset 2px 0 0 var(--drop-indicator); }
+.table-cell.drop-col-after  { box-shadow: inset -2px 0 0 var(--drop-indicator); }
+
+/* Add column button */
+.table-add-col {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  width: 1.5rem;
+  font-size: 14px;
+  color: transparent;
+  margin: 4px 0;
+  border-radius: 3px;
+  transition: color 0.1s;
+}
+
+.table-block:hover .table-add-col {
+  color: var(--text-faint);
+}
+
+.table-add-col:hover {
+  color: var(--text-muted) !important;
+  background: var(--border);
+}
+
+.cell-editor {
+  outline: none;
+  min-height: 1em;
+  background: var(--active-bg);
+}
+
+/* Context menu */
+.context-menu {
+  position: fixed;
+  z-index: 100;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  min-width: 10rem;
+}
+
+.context-menu-item {
+  all: unset;
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+
+.context-menu-item:hover {
+  background: var(--active-bg);
+}
+
+.outline-table {
+  border-spacing: 0;
+  width: 100%;
+  font-size: inherit;
+  margin: 1.25rem 0 4px;
+}
+
+.outline-table td {
+  border: 1px solid var(--border);
+  border-right: none;
+  border-bottom: none;
+  padding: 4px 8px;
+  min-width: 60px;
+  min-height: 1rem;
+  cursor: text;
+  position: relative;
+  overflow: visible;
+}
+
+.outline-table tr td:last-child {
+  border-right: 1px solid var(--border);
+}
+
+.outline-table tr:last-child td {
+  border-bottom: 1px solid var(--border);
+}
+
+.outline-table tr:first-child > .table-header-cell {
+  font-weight: 600;
+  background: var(--sidebar-bg);
+}
+
+.table-header-cell {
+  font-weight: 600;
+}
+
+
+
+.table-add-col {
+  border: 1px dashed var(--border) !important;
+  color: var(--text-faint);
+  cursor: pointer;
+  text-align: center;
+  width: 2rem;
+  font-size: 14px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.outline-table:hover .table-add-col {
+  opacity: 1;
+}
+
+.table-add-col:hover {
+  color: var(--text-muted);
+  background: var(--border);
+}
+
+.sidebar.drop-active {
+  outline: 2px solid var(--drop-indicator);
+  outline-offset: -2px;
+}
+
+/* --- Editor --- */
+
+.editor {
+  flex: 1;
+  padding: 48px 64px;
+  overflow-y: auto;
+  max-width: 800px;
+}
+
+.editor.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+}
+
+.page-title {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.page-toolbar {
+  position: sticky;
+  top: 0;
+  float: right;
+  display: flex;
+  gap: 2px;
+  z-index: 2;
+}
+
+.toolbar-btn {
+  all: unset;
+  cursor: pointer;
+  color: var(--text-faint);
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toolbar-btn:hover {
+  color: var(--text-muted);
+  background: var(--border);
+}
+
+.toolbar-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.toolbar-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 2px;
+}
+
+/* --- Block --- */
+
+.block {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--indent) - var(--bullet-size));
+  min-height: 1.75rem;
+  position: relative;
+  padding-left: calc(var(--depth, 0) * var(--indent));
+}
+
+.block.dragging {
+  opacity: 0.4;
+}
+
+/* Drop indicators */
+
+.block.drop-before::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--drop-indicator);
+  border-radius: 1px;
+  z-index: 1;
+}
+
+.block.drop-after::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--drop-indicator);
+  border-radius: 1px;
+  z-index: 1;
+}
+
+.block.drop-nested::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: calc(var(--indent) + var(--bullet-size));
+  right: 0;
+  height: 2px;
+  background: var(--drop-indicator);
+  border-radius: 1px;
+  z-index: 1;
+}
+
+/* --- Bullet / collapse toggle --- */
+
+.bullet {
+  width: var(--bullet-size);
+  height: var(--bullet-size);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: grab;
+  border-radius: 4px;
+}
+
+.bullet:hover {
+  background: var(--border);
+}
+
+/* Default: small dot */
+.bullet::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  background: var(--bullet);
+  border-radius: 50%;
+}
+
+/* Paragraph blocks: no dot, but still draggable */
+.bullet.paragraph::after {
+  background: transparent;
+}
+
+.bullet.paragraph:hover::after {
+  background: var(--border);
+}
+
+/* Has children: show caret instead of dot */
+.bullet.has-children {
+  cursor: pointer;
+}
+
+.bullet.has-children::after {
+  width: 0;
+  height: 0;
+  background: none;
+  border-radius: 0;
+  border-left: 5px solid var(--bullet);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.15s;
+  transform: rotate(90deg);
+}
+
+.bullet.has-children.collapsed::after {
+  transform: rotate(0deg);
+}
+
+/* Filled dot when collapsed (like Logseq) */
+.bullet.has-children.collapsed {
+  background: var(--border);
+}
+
+.block-content {
+  flex: 1;
+  font-size: 15px;
+  line-height: 1.7;
+  padding: 2px 6px;
+  border-radius: 4px;
+  min-height: 28px;
+  outline: none;
+  word-break: break-word;
+  cursor: text;
+}
+
+.block-content.editing {
+  background: var(--active-bg);
+}
+
+/* Horizontal rule block */
+.block > hr {
+  flex: 1;
+  border: none;
+  border-top: 2px solid var(--border);
+  margin: 0;
+  cursor: pointer;
+}
+
+/* Heading levels */
+.block-content.heading-1 { font-size: 1.6em;  font-weight: 700; line-height: 1.3; }
+.block-content.heading-2 { font-size: 1.35em; font-weight: 700; line-height: 1.3; }
+.block-content.heading-3 { font-size: 1.15em; font-weight: 600; }
+.block-content.heading-4 { font-size: 1em;    font-weight: 600; }
+.block-content.heading-5 { font-size: 0.9em;  font-weight: 600; }
+.block-content.heading-6 { font-size: 0.85em; font-weight: 500; }
+
+/* --- Inline markdown --- */
+
+code {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 0.9em;
+  background: var(--border);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+mark {
+  background: oklch(0.9 0.1 90);
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+s {
+  color: var(--text-faint);
+}
+
+/* --- Wiki links & tags --- */
+
+.wiki-link,
+.tag {
+  color: var(--link);
+  background: var(--link-bg);
+  border-radius: 3px;
+  padding: 0 3px;
+  cursor: pointer;
+}
+
+.wiki-link:hover,
+.tag:hover {
+  text-decoration: underline;
+}
+
+.hyperlink {
+  color: var(--link);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--link), transparent 60%);
+}
+
+.hyperlink:hover {
+  text-decoration-color: var(--link);
+}
+
+/* --- TODO markers --- */
+
+.block-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.todo-marker {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--bullet);
+  border-radius: 3px;
+  flex-shrink: 0;
+  margin-top: 4px;
+  cursor: pointer;
+}
+
+.todo-marker.doing {
+  border-color: var(--link);
+  background: var(--link-bg);
+}
+
+.todo-marker.later {
+  border-color: var(--text-faint);
+  background: var(--border);
+}
+
+.todo-marker.wait {
+  border-color: oklch(0.65 0.15 60);
+  background: oklch(0.92 0.06 60);
+}
+
+.todo-marker.done {
+  border-color: var(--bullet);
+  background: var(--bullet);
+  position: relative;
+}
+
+.todo-marker.done::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  left: 4px;
+  width: 4px;
+  height: 8px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.todo-marker.cancelled {
+  border-color: var(--text-faint);
+  background: var(--text-faint);
+  position: relative;
+}
+
+.todo-marker.cancelled::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  left: 2px;
+  width: 8px;
+  height: 2px;
+  background: white;
+}
+
+.block-content.is-done > span,
+.block-content.is-cancelled > span {
+  text-decoration: line-through;
+  color: var(--text-faint);
+}
+
+/* --- Markdown checkboxes --- */
+
+.md-checkbox {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--bullet);
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-right: 4px;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.md-checkbox.checked {
+  background: var(--bullet);
+}
+
+.md-checkbox.checked::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 3px;
+  width: 4px;
+  height: 7px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* --- Backlinks --- */
+
+.backlinks {
+  margin-top: 48px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+
+.backlinks h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 12px;
+}
+
+.backlink {
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  background: var(--sidebar-bg);
+}
+
+.backlink:hover {
+  background: var(--border);
+}
+
+.backlink-page {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.backlink-content {
+  font-size: 14px;
+  line-height: 1.5;
+}
