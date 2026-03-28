@@ -14,7 +14,7 @@ import {
   getTableGrid, createTable, insertTableRow, insertTableCol, reorderTableRow, reorderTableCol, deleteTableRow, deleteTableCol,
   getBacklinks,
   navigateTo, navigateById, findPageBySlug, currentPage, activeBlockId,
-  isJournalSlug, formatJournalTitle, pageTitle, pageList,
+  isJournalSlug, formatJournalTitle, pageTitle, pageList, isTentativePage,
 } from '../src/db';
 
 const encode = (s: string) => new TextEncoder().encode(s);
@@ -885,6 +885,32 @@ describe('renderContent', () => {
     expect(tags).toBe(2);
   });
 
+  it('does not parse tags when not followed by whitespace or end', () => {
+    const html = renderContent('email user#name or #good tag');
+    const tags = (html.match(/class="tag"/g) ?? []).length;
+    expect(tags).toBe(1);
+    expect(html).toContain('data-page="good"');
+    expect(html).not.toContain('data-page="name"');
+  });
+
+  it('parses tag at end of string', () => {
+    const html = renderContent('end tag #done');
+    expect(html).toContain('class="tag"');
+    expect(html).toContain('data-page="done"');
+  });
+
+  it('parses hierarchical tags with slashes', () => {
+    const html = renderContent('tagged #project/frontend here');
+    expect(html).toContain('class="tag"');
+    expect(html).toContain('data-page="project/frontend"');
+    expect(html).toContain('#project/frontend');
+  });
+
+  it('parses hierarchical tag at end of string', () => {
+    const html = renderContent('see #foo/bar/baz');
+    expect(html).toContain('data-page="foo/bar/baz"');
+  });
+
   it('escapes HTML', () => {
     const html = renderContent('<script>alert("xss")</script>');
     expect(html).not.toContain('<script>');
@@ -1284,7 +1310,7 @@ describe('getBacklinks', () => {
 
     const links = getBacklinks(targetId);
     expect(links.length).toBe(2);
-    expect(links.map(b => b.id).sort()).toEqual(['1', '3']);
+    expect(links.map(l => l.block.id).sort()).toEqual(['1', '3']);
   });
 
   it('finds blocks referencing a page via #tag', () => {
@@ -1295,7 +1321,7 @@ describe('getBacklinks', () => {
 
     const links = getBacklinks(projectId);
     expect(links.length).toBe(1);
-    expect(links[0].id).toBe('1');
+    expect(links[0].block.id).toBe('1');
   });
 
   it('finds blocks referencing a page via #[[multi word]] tag', () => {
@@ -1305,7 +1331,33 @@ describe('getBacklinks', () => {
 
     const links = getBacklinks(targetId);
     expect(links.length).toBe(1);
-    expect(links[0].id).toBe('1');
+    expect(links[0].block.id).toBe('1');
+  });
+
+  it('finds blocks referencing a page via hierarchical #tag with slashes', () => {
+    const targetId = getOrCreatePage('project/frontend');
+    const sourceId = getOrCreatePage('notes');
+    saveBlock({ id: '1', content: 'see #project/frontend for details', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: '2', content: 'no ref here', pageId: sourceId, parent: null, order: 1 });
+
+    const links = getBacklinks(targetId);
+    expect(links.length).toBe(1);
+    expect(links[0].block.id).toBe('1');
+  });
+
+  it('includes children of referencing blocks', () => {
+    const targetId = getOrCreatePage('target');
+    const sourceId = getOrCreatePage('source');
+    saveBlock({ id: '1', content: 'mentions [[target]]', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: '1a', content: 'child detail', pageId: sourceId, parent: '1', order: 0 });
+    saveBlock({ id: '1b', content: 'another child', pageId: sourceId, parent: '1', order: 1 });
+
+    const links = getBacklinks(targetId);
+    expect(links.length).toBe(1);
+    expect(links[0].block.id).toBe('1');
+    expect(links[0].children.length).toBe(2);
+    expect(links[0].children.map(c => c.id).sort()).toEqual(['1a', '1b']);
+    expect(links[0].children[0].depth).toBe(1);
   });
 
   it('returns empty for no backlinks', () => {
@@ -1347,6 +1399,73 @@ describe('navigateTo', () => {
     navigateById(pageId);
     expect(currentPage.value).toBe(pageId);
   });
+
+  it('new page from navigateTo is tentative (not persisted)', async () => {
+    const store = createMockStore();
+    await init(store);
+
+    navigateTo('ghost-page');
+    const pageId = currentPage.value!;
+    expect(pageId).toBeTruthy();
+    expect(isTentativePage(pageId)).toBe(true);
+
+    // Should be in pageData (visible in UI)
+    expect(pageData.value[pageId]).toBeDefined();
+    // But NOT in the store
+    const storeVal = await store.Get({ key: encode('page/' + pageId) });
+    expect(storeVal.value).toBeNull();
+    // Block should also not be in the store
+    const blocks = Object.values(blockData.value).filter(b => b.pageId === pageId);
+    expect(blocks.length).toBe(1);
+    const blockVal = await store.Get({ key: encode('block/' + blocks[0].id) });
+    expect(blockVal.value).toBeNull();
+  });
+
+  it('tentative page is persisted when block gets content', async () => {
+    const store = createMockStore();
+    await init(store);
+
+    navigateTo('will-have-content');
+    const pageId = currentPage.value!;
+    expect(isTentativePage(pageId)).toBe(true);
+
+    // Simulate typing — save block with content
+    const blocks = Object.values(blockData.value).filter(b => b.pageId === pageId);
+    saveBlock({ ...blocks[0], content: 'hello world' });
+
+    // Page should now be persisted
+    expect(isTentativePage(pageId)).toBe(false);
+    const storeVal = await store.Get({ key: encode('page/' + pageId) });
+    expect(storeVal.value).not.toBeNull();
+    const blockVal = await store.Get({ key: encode('block/' + blocks[0].id) });
+    expect(blockVal.value).not.toBeNull();
+  });
+
+  it('tentative page is discarded when navigating away without content', async () => {
+    const store = createMockStore();
+    await init(store);
+
+    navigateTo('temp-page');
+    const tempId = currentPage.value!;
+    expect(isTentativePage(tempId)).toBe(true);
+
+    // Navigate away without typing
+    const otherId = getOrCreatePage('real-page');
+    saveBlock({ id: 'r1', content: 'real', pageId: otherId, parent: null, order: 0 });
+    navigateTo('real-page');
+
+    // Tentative page should be gone
+    expect(pageData.value[tempId]).toBeUndefined();
+    const blocks = Object.values(blockData.value).filter(b => b.pageId === tempId);
+    expect(blocks.length).toBe(0);
+  });
+
+  it('existing page with content is not tentative', () => {
+    const pageId = getOrCreatePage('solid');
+    saveBlock({ id: '1', content: 'has content', pageId, parent: null, order: 0 });
+    navigateTo('solid');
+    expect(isTentativePage(pageId)).toBe(false);
+  });
 });
 
 describe('findPageBySlug', () => {
@@ -1382,8 +1501,8 @@ describe('pageList', () => {
   });
 
   it('sorts journals before regular pages, journals newest first', () => {
-    navigateTo('2026-03-25');
-    navigateTo('2026-03-27');
+    getOrCreatePage('2026-03-25');
+    getOrCreatePage('2026-03-27');
     getOrCreatePage('Notes');
     const pages = pageList.value;
     expect(pages[0].title).toBe('2026-03-27');

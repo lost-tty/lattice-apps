@@ -12,6 +12,7 @@ import type { Store, Page, Block, BlockNode, WatchEvent } from './types';
 
 const encode = (s: string) => new TextEncoder().encode(s);
 const decode = (b: Uint8Array) => new TextDecoder().decode(b);
+const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function unwrapList(resp: unknown): { key: Uint8Array; value: Uint8Array }[] {
   if (Array.isArray(resp)) return resp;
@@ -88,12 +89,63 @@ export async function init(s: Store) {
   });
 }
 
+// --- Tentative pages ---
+// Pages created by navigating to a non-existent tag/link are tentative:
+// visible in memory but not written to the store until the user adds content.
+const tentativePages = new Set<string>();
+const tentativeBlocks = new Set<string>();
+
+export function isTentativePage(pageId: string): boolean {
+  return tentativePages.has(pageId);
+}
+
+/** Persist a tentative page and its blocks to the store. */
+function materializePage(pageId: string) {
+  if (!tentativePages.has(pageId)) return;
+  tentativePages.delete(pageId);
+  const page = pageData.value[pageId];
+  if (page) {
+    const { id, ...rest } = page;
+    store?.Put({ key: encode('page/' + id), value: encode(JSON.stringify(rest)) });
+  }
+  // Persist any tentative blocks for this page
+  for (const blockId of [...tentativeBlocks]) {
+    const block = blockData.value[blockId];
+    if (block?.pageId === pageId) {
+      tentativeBlocks.delete(blockId);
+      const { id, ...rest } = block;
+      store?.Put({ key: encode('block/' + id), value: encode(JSON.stringify(rest)) });
+    }
+  }
+}
+
+/** Discard a tentative page and its blocks from memory. */
+function discardTentativePage(pageId: string) {
+  if (!tentativePages.has(pageId)) return;
+  tentativePages.delete(pageId);
+  // Remove tentative blocks
+  const next: Record<string, Block> = {};
+  for (const [id, b] of Object.entries(blockData.value)) {
+    if (b.pageId === pageId && tentativeBlocks.has(id)) {
+      tentativeBlocks.delete(id);
+    } else {
+      next[id] = b;
+    }
+  }
+  blockData.value = next;
+  // Remove page from memory
+  const { [pageId]: _, ...restPages } = pageData.value;
+  pageData.value = restPages;
+}
+
 /** Reset state — for tests. */
 export function reset() {
   pageData.value = {};
   blockData.value = {};
   currentPage.value = null;
   activeBlockId.value = null;
+  tentativePages.clear();
+  tentativeBlocks.clear();
 }
 
 // --- Page CRUD ---
@@ -142,21 +194,61 @@ export function findPageBySlug(slug: string): Page | undefined {
   return Object.values(pageData.value).find(p => p.slug === slug);
 }
 
-/** Navigate to a page by title. Creates the page and a seed block if they don't exist. */
+/** Navigate to a page by title. Creates the page and a seed block if they don't exist.
+ *  New pages are tentative (in-memory only) until the user adds content. */
 export function navigateTo(title: string) {
-  const pageId = getOrCreatePage(title);
-  const hasBlocks = Object.values(blockData.value).some(b => b.pageId === pageId);
-  if (!hasBlocks) {
-    const id = crypto.randomUUID();
-    saveBlock({ id, content: '', pageId, parent: null, order: 0 });
-    activeBlockId.value = id;
+  // Clean up previous tentative page if navigating away without content
+  const prev = currentPage.value;
+  if (prev && tentativePages.has(prev)) {
+    const hasContent = Object.values(blockData.value).some(
+      b => b.pageId === prev && b.content.trim() !== '',
+    );
+    if (!hasContent) discardTentativePage(prev);
   }
-  currentPage.value = pageId;
+
+  const existing = Object.values(pageData.value).find(p => p.title === title);
+  if (existing) {
+    // Page exists (persisted or tentative) — just navigate
+    const hasBlocks = Object.values(blockData.value).some(b => b.pageId === existing.id);
+    if (!hasBlocks) {
+      const id = crypto.randomUUID();
+      saveBlock({ id, content: '', pageId: existing.id, parent: null, order: 0 });
+      activeBlockId.value = id;
+    }
+    currentPage.value = existing.id;
+    return;
+  }
+
+  // Create tentative page (in memory only, no store write)
+  const id = crypto.randomUUID();
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const now = new Date().toISOString();
+  const folder = isJournalSlug(title) ? 'journals' : undefined;
+  const page: Page = { id, title, slug, folder, createdAt: now, updatedAt: now };
+  pageData.value = { ...pageData.value, [id]: page };
+  tentativePages.add(id);
+
+  // Create tentative seed block (in memory only)
+  const blockId = crypto.randomUUID();
+  const block: Block = { id: blockId, content: '', pageId: id, parent: null, order: 0, createdAt: now, updatedAt: now };
+  blockData.value = { ...blockData.value, [blockId]: block };
+  tentativeBlocks.add(blockId);
+  activeBlockId.value = blockId;
+
+  currentPage.value = id;
 }
 
 /** Navigate to a page by its ID. Creates a seed block if none exist. */
 export function navigateById(pageId: string) {
   if (!pageData.value[pageId]) return;
+  // Clean up previous tentative page
+  const prev = currentPage.value;
+  if (prev && prev !== pageId && tentativePages.has(prev)) {
+    const hasContent = Object.values(blockData.value).some(
+      b => b.pageId === prev && b.content.trim() !== '',
+    );
+    if (!hasContent) discardTentativePage(prev);
+  }
   const hasBlocks = Object.values(blockData.value).some(b => b.pageId === pageId);
   if (!hasBlocks) {
     const id = crypto.randomUUID();
@@ -177,6 +269,15 @@ export function saveBlock(block: Block) {
     updatedAt: now,
   };
   blockData.value = { ...blockData.value, [block.id]: saved };
+
+  // If this block has content and belongs to a tentative page, materialize it
+  if (block.content.trim() !== '' && tentativePages.has(block.pageId)) {
+    materializePage(block.pageId);
+  }
+
+  // Don't persist tentative blocks (they get persisted via materializePage)
+  if (tentativeBlocks.has(block.id)) return;
+
   const { id, ...rest } = saved;
   store?.Put({ key: encode('block/' + id), value: encode(JSON.stringify(rest)) });
 }
@@ -948,7 +1049,7 @@ export function renderContent(text: string): string {
   html = html.replace(/(^|\s)#\[\[([^\]]+)\]\]/g, '$1<span class="tag" data-page="$2">#$2</span>');
   html = html.replace(/\[\[([^\]]+)\]\]/g, '<span class="wiki-link" data-page="$1">$1</span>');
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a class="hyperlink" href="$2" target="_blank" rel="noopener">$1</a>');
-  html = html.replace(/(^|\s)#(\w[\w-]*)/g, '$1<span class="tag" data-page="$2">#$2</span>');
+  html = html.replace(/(^|\s)#(\w[\w\-/]*)(?=\s|$)/g, '$1<span class="tag" data-page="$2">#$2</span>');
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
   html = html.replace(/~~(.+?)~~/g, '<s>$1</s>');
@@ -1010,18 +1111,58 @@ export function cycleTodoStatus(content: string): string {
   return prefix ? `${prefix} ${text}` : text;
 }
 
-/** Find all blocks on other pages that reference this page by wiki link or #tag. */
-export function getBacklinks(pageId: string): Block[] {
+/** Find all blocks on other pages that reference this page by wiki link or #tag.
+ *  Returns each referencing block with its children flattened (depth relative to the ref block). */
+export function getBacklinks(pageId: string): { block: Block; children: FlatBlock[] }[] {
   const page = pageData.value[pageId];
   if (!page) return [];
   const wikiPattern = `[[${page.title}]]`;
   const multiWordTag = `#[[${page.title}]]`;
-  return Object.values(blockData.value)
+  const refBlocks = Object.values(blockData.value)
     .filter(b => b.pageId !== pageId && (
       b.content.includes(wikiPattern) ||
       b.content.includes(multiWordTag) ||
-      (/^\w[\w-]*$/.test(page.slug) && new RegExp(`(^|\\s)#${page.slug}\\b`).test(b.content))
+      (/^\w[\w\-/]*$/.test(page.title) && new RegExp(`(^|\\s)#${escapeRegex(page.title)}(?=\\s|$)`).test(b.content))
     ));
+  return refBlocks.map(block => {
+    const allBlocks = Object.values(blockData.value).filter(b => b.pageId === block.pageId);
+    const childTree = buildSubtree(allBlocks, block.id);
+    const children = flattenTree(childTree, 1);
+    return { block, children };
+  });
+}
+
+/** Collect all tags used across all blocks, with their occurrence count.
+ *  Case-insensitive dedup: merges counts, keeps the most-used casing. */
+export function getTagCounts(): { tag: string; count: number }[] {
+  // First pass: count each exact tag
+  const exact = new Map<string, number>();
+  const multiWordRe = /(^|\s)#\[\[([^\]]+)\]\]/g;
+  const singleWordRe = /(^|\s)#(\w[\w\-/]*)(?=\s|$)/g;
+  for (const block of Object.values(blockData.value)) {
+    let m;
+    multiWordRe.lastIndex = 0;
+    while ((m = multiWordRe.exec(block.content))) {
+      exact.set(m[2], (exact.get(m[2]) ?? 0) + 1);
+    }
+    singleWordRe.lastIndex = 0;
+    while ((m = singleWordRe.exec(block.content))) {
+      exact.set(m[2], (exact.get(m[2]) ?? 0) + 1);
+    }
+  }
+  // Second pass: merge case-insensitively, keep the casing with highest count
+  const merged = new Map<string, { tag: string; count: number }>();
+  for (const [tag, count] of exact) {
+    const key = tag.toLowerCase();
+    const prev = merged.get(key);
+    if (!prev) {
+      merged.set(key, { tag, count });
+    } else {
+      prev.count += count;
+      if (count > (exact.get(prev.tag) ?? 0)) prev.tag = tag;
+    }
+  }
+  return [...merged.values()].sort((a, b) => b.count - a.count);
 }
 
 /** Return the folder a page belongs to, or undefined for root pages. */
@@ -1045,6 +1186,18 @@ export function formatJournalTitle(slug: string): string {
   const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'];
   return `${DAYS[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+}
+
+/** All journal pages, sorted newest first. */
+export function getJournalPages(): Page[] {
+  return Object.values(pageData.value)
+    .filter(p => p.folder === 'journals')
+    .sort((a, b) => b.title.localeCompare(a.title));
+}
+
+/** Is this page a journal page? */
+export function isJournalPage(pageId: string): boolean {
+  return pageData.value[pageId]?.folder === 'journals';
 }
 
 /** Return a human-readable title for a page ID. */

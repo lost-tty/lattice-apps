@@ -6,8 +6,9 @@
 // Blocks render as a FLAT list so indent/outdent/drag keeps
 // the contentEditable mounted and focused.
 
-import { useRef, useEffect, useState } from 'preact/hooks';
+import { useRef, useEffect, useState, useCallback } from 'preact/hooks';
 import type { FlatBlock } from './db';
+import type { Block } from './types';
 import { IconCopy, IconDownload } from './Icons';
 import {
   activeBlockId, currentPage,
@@ -17,6 +18,7 @@ import {
   parseMarkdownToItems, insertBlocksAfter, exportPage,
   renderContent, parseHeading, parseTodoStatus, cycleTodoStatus, toggleCheckbox, isTableRow, isTableSeparator, parseTableCells, getTableGrid,
   getBacklinks, pageTitle, navigateTo, navigateById,
+  isJournalPage, getJournalPages,
 } from './db';
 
 // --- Drag state (module-level, no signals needed) ---
@@ -677,6 +679,9 @@ function renderBlockList(flat: FlatBlock[]) {
 
 // --- Editor ---
 
+// How many journal days to load per batch
+const JOURNAL_BATCH = 5;
+
 export function Editor() {
   const pageId = currentPage.value;
   if (!pageId) {
@@ -687,6 +692,14 @@ export function Editor() {
     );
   }
 
+  if (isJournalPage(pageId)) {
+    return <JournalView startPageId={pageId} />;
+  }
+
+  return <SinglePageView pageId={pageId} />;
+}
+
+function SinglePageView({ pageId }: { pageId: string }) {
   const tree = buildTree(pageId);
   const flat = flattenTree(tree);
   const backlinks = getBacklinks(pageId);
@@ -708,8 +721,6 @@ export function Editor() {
     URL.revokeObjectURL(url);
   }
 
-
-
   return (
     <div class="editor">
       <div class="page-toolbar">
@@ -720,20 +731,100 @@ export function Editor() {
       <div class="block-tree">
         {renderBlockList(flat)}
       </div>
-      {backlinks.length > 0 && (
-        <div class="backlinks">
-          <h3>Linked References</h3>
-          {backlinks.map(b => (
-            <div key={b.id} class="backlink" onClick={() => navigateById(b.pageId)}>
-              <span class="backlink-page">{pageTitle(b.pageId)}</span>
-              <span
-                class="backlink-content"
-                dangerouslySetInnerHTML={{ __html: renderContent(b.content) }}
-              />
+      {backlinks.length > 0 && <BacklinksPanel backlinks={backlinks} />}
+    </div>
+  );
+}
+
+function JournalView({ startPageId }: { startPageId: string }) {
+  const allJournals = getJournalPages();
+
+  // Find the index of the current journal in the sorted list
+  const startIdx = allJournals.findIndex(p => p.id === startPageId);
+  const [visibleCount, setVisibleCount] = useState(JOURNAL_BATCH);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  // Reset visible count when the start page changes
+  useEffect(() => {
+    setVisibleCount(JOURNAL_BATCH);
+  }, [startPageId]);
+
+  // Slice from the current journal onwards (older)
+  const visibleJournals = allJournals.slice(
+    Math.max(startIdx, 0),
+    Math.max(startIdx, 0) + visibleCount,
+  );
+  const hasMore = Math.max(startIdx, 0) + visibleCount < allJournals.length;
+
+  // IntersectionObserver to load more when sentinel enters viewport
+  const loadMore = useCallback(() => {
+    if (hasMore) setVisibleCount(c => c + JOURNAL_BATCH);
+  }, [hasMore]);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => { if (entries[0].isIntersecting) loadMore(); },
+      { rootMargin: '200px' },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loadMore, visibleCount]);
+
+  return (
+    <div class="editor journal-view">
+      {visibleJournals.map(page => (
+        <JournalDay key={page.id} pageId={page.id} />
+      ))}
+      {hasMore && <div ref={sentinelRef} class="journal-sentinel">Loading...</div>}
+    </div>
+  );
+}
+
+function JournalDay({ pageId }: { pageId: string }) {
+  const tree = buildTree(pageId);
+  const flat = flattenTree(tree);
+  const backlinks = getBacklinks(pageId);
+
+  return (
+    <div class="journal-day">
+      <h1 class="page-title journal-day-title" onClick={() => navigateById(pageId)}>
+        {pageTitle(pageId)}
+      </h1>
+      <div class="block-tree">
+        {renderBlockList(flat)}
+      </div>
+      {backlinks.length > 0 && <BacklinksPanel backlinks={backlinks} />}
+    </div>
+  );
+}
+
+function BacklinksPanel({ backlinks }: { backlinks: { block: Block; children: FlatBlock[] }[] }) {
+  return (
+    <div class="backlinks">
+      <h3>Linked References</h3>
+      {backlinks.map(({ block, children }) => (
+        <div key={block.id} class="backlink" onClick={() => navigateById(block.pageId)}>
+          <span class="backlink-page">{pageTitle(block.pageId)}</span>
+          <span
+            class="backlink-content"
+            dangerouslySetInnerHTML={{ __html: renderContent(block.content) }}
+          />
+          {children.length > 0 && (
+            <div class="backlink-children">
+              {children.map(child => (
+                <div
+                  key={child.id}
+                  class="backlink-child"
+                  style={`padding-left: ${child.depth * 1}rem`}
+                  dangerouslySetInnerHTML={{ __html: renderContent(child.content) }}
+                />
+              ))}
             </div>
-          ))}
+          )}
         </div>
-      )}
+      ))}
     </div>
   );
 }
