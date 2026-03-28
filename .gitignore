@@ -1,4 +1,5 @@
 *.zip
+*.lattice
 .DS_Store
 node_modules/
 */dist/
