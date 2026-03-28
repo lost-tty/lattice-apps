@@ -31,7 +31,7 @@ jobs:
         run: npm test
         working-directory: ${{ matrix.app }}
 
-      - name: Build & bundle zip
+      - name: Build & bundle
         run: mkdir -p dist && npm run bundle
         working-directory: ${{ matrix.app }}
 
@@ -40,3 +40,36 @@ jobs:
         with:
           name: ${{ matrix.app }}
           path: ${{ matrix.app }}/${{ matrix.app }}.lattice
+
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Delete existing latest release
+        run: gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create dev release
+        run: |
+          gh release create latest \
+            artifacts/outliner/outliner.lattice \
+            artifacts/kanban/kanban.lattice \
+            artifacts/todo/todo.lattice \
+            artifacts/inventory/inventory.lattice \
+            --title "Latest build ($(date -u +%Y-%m-%d))" \
+            --notes "Built from main at $(git rev-parse --short HEAD)" \
+            --prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
