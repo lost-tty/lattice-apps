@@ -9,18 +9,19 @@
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'preact/hooks';
 import type { FlatBlock } from './db';
 import type { Block } from './types';
-import { IconCopy, IconDownload, IconCode, IconTree } from './Icons';
+import { IconCopy, IconDownload, IconCode, IconTree, IconUndo, IconRedo } from './Icons';
 import type { BlockNode } from './types';
 import {
   activeBlockId, currentPage, blockData,
   saveBlock, deleteBlock, buildTree, flattenTree, hasChildren, toggleCollapse,
   createBlockAfter, createChildBlock, isParagraph, indentBlock, outdentBlock, removeBlock, joinBlockWithPrevious, moveBlock, isDescendant,
-  blockKind, canAcceptChildren,
+  blockKind, canAcceptChildren, isCollapsed,
   createTable, insertTableRow, insertTableCol, reorderTableRow, reorderTableCol, deleteTableRow, deleteTableCol,
   parseMarkdownToItems, insertBlocksAfter, exportPage,
   renderContent, parseHeading, parseTodoStatus, cycleTodoStatus, toggleCheckbox, isTableRow, isTableSeparator, parseTableCells, getTableGrid,
   getBacklinks, pageTitle, navigateTo, navigateById,
   isJournalPage, getJournalPages,
+  beginUndo, commitUndo, undo, redo, canUndo, canRedo,
 } from './db';
 
 // --- Drag state (module-level, no signals needed) ---
@@ -184,15 +185,25 @@ function BlockItem({ node }: { node: FlatBlock }) {
     const raw = el.textContent || '';
     const { type: parsedType, content: parsedContent } = parseRaw(raw);
 
+    // Undo / Redo
+    if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+      e.preventDefault();
+      saveFromEditor();
+      if (e.shiftKey) redo(); else undo();
+      return;
+    }
+
     if (e.key === 'Enter') {
       e.preventDefault();
 
       // If the block content is a table row, convert it to a table
       const cells = parseTableCells(parsedContent);
       if (cells && cells.length > 0) {
+        beginUndo('create table');
         const tableId = createTable(node.id, [cells]);
-        deleteBlock(node.id);
+        void deleteBlock(node.id);
         const newCellIds = insertTableRow(tableId);
+        commitUndo();
         if (newCellIds.length > 0) activateBlock(newCellIds[0], 'start');
         return;
       }
@@ -203,13 +214,16 @@ function BlockItem({ node }: { node: FlatBlock }) {
 
       if (rawBefore === '') {
         // Cursor at position 0: insert empty block before, keep content in new block
+        beginUndo('split block');
         saveBlock({ ...node, content: '', type: 'paragraph' });
         const { type: afterType, content: afterContent } = parseRaw(raw);
         const newId = createBlockAfter(node.id, afterContent, afterType);
+        commitUndo();
         activateBlock(newId, 'start');
         return;
       }
 
+      beginUndo('split block');
       const { type: beforeType, content: beforeContent } = parseRaw(rawBefore);
       el.textContent = rawBefore;
       saveBlock({ ...node, content: beforeContent, type: beforeType });
@@ -218,11 +232,13 @@ function BlockItem({ node }: { node: FlatBlock }) {
       const { level } = parseHeading(beforeContent);
       if (level) {
         const newId = createChildBlock(node.id, rawAfter);
+        commitUndo();
         activateBlock(newId, 'start');
         return;
       }
 
       const newId = createBlockAfter(node.id, rawAfter, beforeType);
+      commitUndo();
       activateBlock(newId, 'start');
       return;
     }
@@ -231,8 +247,10 @@ function BlockItem({ node }: { node: FlatBlock }) {
       // Cursor at the very start → join with previous block
       if (getCursorOffset(el) === 0 && raw !== '') {
         e.preventDefault();
+        beginUndo('join blocks');
         saveFromEditor();
         const joined = joinBlockWithPrevious(node.id);
+        commitUndo();
         if (joined) activateBlock(joined.prevId, joined.cursorPos);
         return;
       }
@@ -249,12 +267,14 @@ function BlockItem({ node }: { node: FlatBlock }) {
       // Completely empty → try to join or delete
       if (raw === '') {
         e.preventDefault();
+        beginUndo('delete block');
         const joined = joinBlockWithPrevious(node.id);
         if (joined) {
           activateBlock(joined.prevId, joined.cursorPos);
         } else {
           removeBlock(node.id);
         }
+        commitUndo();
         return;
       }
       return;
@@ -262,9 +282,11 @@ function BlockItem({ node }: { node: FlatBlock }) {
 
     if (e.key === 'Tab') {
       e.preventDefault();
+      beginUndo(e.shiftKey ? 'outdent' : 'indent');
       saveFromEditor();
       if (e.shiftKey) outdentBlock(node.id);
       else indentBlock(node.id);
+      commitUndo();
       return;
     }
 
@@ -329,17 +351,20 @@ function BlockItem({ node }: { node: FlatBlock }) {
         (i === 0 ? beforeContent : '') + item.content + (i === items.length - 1 ? rawAfter : ''),
     }));
 
+    beginUndo('paste');
     // The current block takes the first item's content.
     saveBlock({ ...node, content: merged[0].content });
 
     if (merged.length === 1) {
       // Everything fit in one block — place cursor after the pasted text.
+      commitUndo();
       activateBlock(node.id, beforeContent.length + items[0].content.length);
       return;
     }
 
     // Remaining items become new blocks; cursor lands before the "after" text.
     const lastId = insertBlocksAfter(node.id, merged.slice(1));
+    commitUndo();
     const lastContent = merged[merged.length - 1].content;
     activateBlock(lastId, lastContent.length - rawAfter.length);
   }
@@ -440,7 +465,9 @@ function BlockItem({ node }: { node: FlatBlock }) {
     clearDropIndicators();
 
     if (dragBlockId && dragBlockId !== node.id) {
+      beginUndo('move block');
       moveBlock(dragBlockId, node.id, position);
+      commitUndo();
     }
     dragBlockId = null;
   }
@@ -476,7 +503,7 @@ function BlockItem({ node }: { node: FlatBlock }) {
       onDragEnd={handleDragEnd}
     >
       <span
-        class={`gutter${hasKids ? ' has-children' : ''}${node.collapsed ? ' collapsed' : ''}`}
+        class={`gutter${hasKids ? ' has-children' : ''}${isCollapsed(node.id) ? ' collapsed' : ''}`}
         draggable
         onClick={(e: Event) => { if (hasKids) { e.stopPropagation(); toggleCollapse(node.id); } }}
         onDragStart={(e: Event) => handleDragStart(e as DragEvent)}
@@ -668,7 +695,9 @@ function TableBlock({ node }: { node: FlatBlock }) {
           const ke = e as KeyboardEvent;
           if (ke.key === 'Backspace' || ke.key === 'Delete') {
             ke.preventDefault();
+            beginUndo('delete table');
             void deleteBlock(node.id);
+            commitUndo();
             activeBlockId.value = null;
           }
         }}
@@ -889,6 +918,9 @@ function PageSection({ pageId, titleClickable }: { pageId: string; titleClickabl
     <div class={`page-section ${debugPanel !== 'off' ? 'with-debug' : ''}`}>
       <div class="page-section-main">
         <div class="page-toolbar">
+          <button class="toolbar-btn" disabled={!canUndo()} onClick={() => undo()} title="Undo (⌘Z)"><IconUndo /></button>
+          <button class="toolbar-btn" disabled={!canRedo()} onClick={() => redo()} title="Redo (⌘⇧Z)"><IconRedo /></button>
+          <div class="toolbar-sep" />
           <button class={`toolbar-btn${debugPanel === 'markdown' ? ' active' : ''}`} onClick={() => togglePanel('markdown')} title="Debug Markdown"><IconCode /></button>
           <button class={`toolbar-btn${debugPanel === 'ast' ? ' active' : ''}`} onClick={() => togglePanel('ast')} title="Debug AST"><IconTree /></button>
           <div class="toolbar-sep" />
@@ -906,14 +938,18 @@ function PageSection({ pageId, titleClickable }: { pageId: string; titleClickabl
           <div
             class="block-tree-tail"
             onClick={() => {
-              // Walk backwards to find the last top-level block (depth 0)
-              for (let i = flat.length - 1; i >= 0; i--) {
-                if (flat[i].depth === 0) {
-                  const newId = createBlockAfter(flat[i].id, '', 'paragraph');
-                  activateBlock(newId, 'start');
-                  return;
-                }
+              if (flat.length === 0) return;
+              const last = flat[flat.length - 1];
+              const lastBlock = blockData.value[last.id];
+              // If the last visible block is already empty, just focus it
+              if (lastBlock && lastBlock.content === '' && lastBlock.type !== 'table') {
+                activateBlock(last.id, 'start');
+                return;
               }
+              beginUndo('new block');
+              const newId = createBlockAfter(last.id, '', 'paragraph');
+              commitUndo();
+              activateBlock(newId, 'start');
             }}
           />
         </div>
@@ -951,7 +987,7 @@ function ASTContent({ tree }: { tree: BlockNode[] }) {
     const type = node.type === 'table' ? 'table' : node.type === 'paragraph' ? 'para' : 'bullet';
     const snippet = node.content.length > 30 ? node.content.slice(0, 30) + '…' : node.content;
     const meta = [
-      node.collapsed ? 'collapsed' : '',
+      isCollapsed(node.id) ? 'collapsed' : '',
     ].filter(Boolean).join(', ');
 
     return (

@@ -146,6 +146,10 @@ export function reset() {
   activeBlockId.value = null;
   tentativePages.clear();
   tentativeBlocks.clear();
+  undoStacks.clear();
+  redoStacks.clear();
+  activeGroup = null;
+  collapsedBlocks.value = new Set();
 }
 
 // --- Page CRUD ---
@@ -212,7 +216,9 @@ export function navigateTo(title: string) {
     const hasBlocks = Object.values(blockData.value).some(b => b.pageId === existing.id);
     if (!hasBlocks) {
       const id = crypto.randomUUID();
+      undoRedoInProgress = true;
       saveBlock({ id, content: '', pageId: existing.id, parent: null, order: 0 });
+      undoRedoInProgress = false;
       activeBlockId.value = id;
     }
     currentPage.value = existing.id;
@@ -252,22 +258,204 @@ export function navigateById(pageId: string) {
   const hasBlocks = Object.values(blockData.value).some(b => b.pageId === pageId);
   if (!hasBlocks) {
     const id = crypto.randomUUID();
+    undoRedoInProgress = true;
     saveBlock({ id, content: '', pageId, parent: null, order: 0 });
+    undoRedoInProgress = false;
     activeBlockId.value = id;
   }
   currentPage.value = pageId;
 }
 
+// --- Undo / Redo ---
+//
+// Every mutation to blocks is captured as a patch (before/after snapshots).
+// Patches are grouped into undo entries via beginUndo/commitUndo.
+// Stacks are persisted to sessionStorage; oldest entries are evicted on quota error.
+
+type Patch = { id: string; before: Block | null; after: Block | null };
+type UndoEntry = { label: string; patches: Patch[] };
+
+const MAX_UNDO = 200;
+
+function storageKey(pageId: string, type: 'undo' | 'redo') {
+  return `outliner:${type}:${pageId}`;
+}
+
+function loadStack(pageId: string, type: 'undo' | 'redo'): UndoEntry[] {
+  try {
+    const raw = sessionStorage.getItem(storageKey(pageId, type));
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function persistStack(pageId: string, type: 'undo' | 'redo', stack: UndoEntry[]) {
+  const key = storageKey(pageId, type);
+  const json = JSON.stringify(stack);
+  while (true) {
+    try {
+      sessionStorage.setItem(key, json);
+      return;
+    } catch {
+      if (stack.length > 1) {
+        stack.shift();
+      } else {
+        sessionStorage.removeItem(key);
+        return;
+      }
+    }
+  }
+}
+
+// Per-page stacks, lazily loaded
+const undoStacks = new Map<string, UndoEntry[]>();
+const redoStacks = new Map<string, UndoEntry[]>();
+
+function getUndoStack(pageId: string): UndoEntry[] {
+  if (!undoStacks.has(pageId)) undoStacks.set(pageId, loadStack(pageId, 'undo'));
+  return undoStacks.get(pageId)!;
+}
+
+function getRedoStack(pageId: string): UndoEntry[] {
+  if (!redoStacks.has(pageId)) redoStacks.set(pageId, loadStack(pageId, 'redo'));
+  return redoStacks.get(pageId)!;
+}
+
+let activeGroup: Patch[] | null = null;
+let groupLabel = '';
+let groupPageId = '';
+
+/** Start grouping mutations into a single undo entry. */
+export function beginUndo(label: string) {
+  if (activeGroup) commitUndo();
+  activeGroup = [];
+  groupLabel = label;
+  groupPageId = currentPage.value ?? '';
+}
+
+/** Commit the current group to the undo stack. */
+export function commitUndo() {
+  if (!activeGroup || activeGroup.length === 0 || !groupPageId) {
+    activeGroup = null;
+    return;
+  }
+  const stack = getUndoStack(groupPageId);
+  stack.push({ label: groupLabel, patches: activeGroup });
+  if (stack.length > MAX_UNDO) stack.splice(0, stack.length - MAX_UNDO);
+  const redo = getRedoStack(groupPageId);
+  redo.length = 0;
+  persistStack(groupPageId, 'undo', stack);
+  persistStack(groupPageId, 'redo', redo);
+  activeGroup = null;
+}
+
+/** Record a block mutation. Called automatically by saveBlock/deleteBlock. */
+function recordPatch(id: string, before: Block | null, after: Block | null) {
+  // Skip no-ops: same content, type, parent, order, col
+  if (before && after &&
+    before.content === after.content &&
+    before.type === after.type &&
+    before.parent === after.parent &&
+    before.order === after.order &&
+    before.col === after.col) return;
+  const pageId = before?.pageId ?? (after as Block).pageId;
+  if (!activeGroup) {
+    const stack = getUndoStack(pageId);
+    stack.push({ label: 'edit', patches: [{ id, before, after }] });
+    if (stack.length > MAX_UNDO) stack.splice(0, stack.length - MAX_UNDO);
+    const redo = getRedoStack(pageId);
+    redo.length = 0;
+    persistStack(pageId, 'undo', stack);
+    persistStack(pageId, 'redo', redo);
+    return;
+  }
+  activeGroup.push({ id, before, after });
+}
+
+let undoRedoInProgress = false;
+
+/** Can undo/redo on the current page? */
+export function canUndo(): boolean {
+  const pageId = currentPage.value;
+  return !!pageId && getUndoStack(pageId).length > 0;
+}
+
+export function canRedo(): boolean {
+  const pageId = currentPage.value;
+  return !!pageId && getRedoStack(pageId).length > 0;
+}
+
+/** Apply patches in reverse to undo. */
+export function undo() {
+  const pageId = currentPage.value;
+  if (!pageId) return;
+  const stack = getUndoStack(pageId);
+  const entry = stack.pop();
+  if (!entry) return;
+  undoRedoInProgress = true;
+  for (let i = entry.patches.length - 1; i >= 0; i--) {
+    const { id, before } = entry.patches[i];
+    if (before) {
+      saveBlock(before);
+    } else {
+      const next = { ...blockData.value };
+      delete next[id];
+      blockData.value = next;
+      store?.Delete({ key: encode('block/' + id) });
+    }
+  }
+  undoRedoInProgress = false;
+  const redo = getRedoStack(pageId);
+  redo.push(entry);
+  persistStack(pageId, 'undo', stack);
+  persistStack(pageId, 'redo', redo);
+}
+
+/** Reapply patches to redo. */
+export function redo() {
+  const pageId = currentPage.value;
+  if (!pageId) return;
+  const redo = getRedoStack(pageId);
+  const entry = redo.pop();
+  if (!entry) return;
+  undoRedoInProgress = true;
+  for (const { id, after } of entry.patches) {
+    if (after) {
+      saveBlock(after);
+    } else {
+      const next = { ...blockData.value };
+      delete next[id];
+      blockData.value = next;
+      store?.Delete({ key: encode('block/' + id) });
+    }
+  }
+  undoRedoInProgress = false;
+  const stack = getUndoStack(pageId);
+  stack.push(entry);
+  persistStack(pageId, 'undo', stack);
+  persistStack(pageId, 'redo', redo);
+}
+
 // --- Block CRUD ---
 
 export function saveBlock(block: Block) {
-  const existing = blockData.value[block.id];
+  const existing = blockData.value[block.id] ?? null;
+
+  // Skip if nothing meaningful changed
+  if (existing &&
+    existing.content === block.content &&
+    existing.type === block.type &&
+    existing.parent === block.parent &&
+    existing.order === block.order &&
+    existing.col === block.col &&
+    existing.pageId === block.pageId) return;
+
   const now = new Date().toISOString();
   const saved = {
     ...block,
     createdAt: block.createdAt ?? existing?.createdAt ?? now,
     updatedAt: now,
   };
+  if (!undoRedoInProgress) recordPatch(block.id, existing, saved);
   blockData.value = { ...blockData.value, [block.id]: saved };
 
   // If this block has content and belongs to a tentative page, materialize it
@@ -284,6 +472,12 @@ export function saveBlock(block: Block) {
 
 export async function deleteBlock(id: string) {
   const toDelete = [id, ...collectDescendants(id)];
+  if (!undoRedoInProgress) {
+    for (const bid of toDelete) {
+      const existing = blockData.value[bid];
+      if (existing) recordPatch(bid, existing, null);
+    }
+  }
   const next: Record<string, Block> = {};
   const deletes: Promise<void>[] = [];
   for (const [bid, b] of Object.entries(blockData.value)) {
@@ -325,7 +519,7 @@ export function flattenTree(nodes: BlockNode[], depth: number = 0): FlatBlock[] 
   const result: FlatBlock[] = [];
   for (const node of nodes) {
     result.push({ ...node, depth });
-    if (!node.collapsed) {
+    if (!collapsedBlocks.value.has(node.id)) {
       result.push(...flattenTree(node.children, depth + 1));
     }
   }
@@ -340,6 +534,7 @@ export function flattenTree(nodes: BlockNode[], depth: number = 0): FlatBlock[] 
  *  Returns the number of blocks repaired. */
 export function validateTree(pageId: string): number {
   let repaired = 0;
+  undoRedoInProgress = true;
 
   // Step 1: fix dangling parent references (parent block doesn't exist)
   const allBlocks = Object.values(blockData.value).filter(b => b.pageId === pageId);
@@ -358,10 +553,8 @@ export function validateTree(pageId: string): number {
     const block = blockData.value[b.id];
     if (!block) continue;
 
-    // Clamp: a block can be at most one level deeper than the deepest seen so far
     const maxDepth = lastAtDepth.length;
     const effectiveDepth = Math.min(b.depth, maxDepth);
-
     const correctParent = effectiveDepth > 0 ? (lastAtDepth[effectiveDepth - 1] ?? null) : null;
 
     if (block.parent !== correctParent) {
@@ -373,6 +566,7 @@ export function validateTree(pageId: string): number {
     lastAtDepth.length = effectiveDepth + 1;
   }
 
+  undoRedoInProgress = false;
   return repaired;
 }
 
@@ -381,12 +575,37 @@ export function hasChildren(blockId: string): boolean {
   return Object.values(blockData.value).some(b => b.parent === blockId);
 }
 
-/** Toggle collapsed state (persisted to store). */
-export function toggleCollapse(blockId: string) {
-  const block = blockData.value[blockId];
-  if (!block) return;
-  saveBlock({ ...block, collapsed: !block.collapsed });
+// --- Collapse state (local-only, stored in IndexedDB) ---
+
+export const collapsedBlocks = signal<Set<string>>(new Set());
+
+function loadCollapsed() {
+  try {
+    const raw = localStorage.getItem('outliner:collapsed');
+    if (raw) collapsedBlocks.value = new Set(JSON.parse(raw));
+  } catch { /* ignore */ }
 }
+
+function persistCollapsed() {
+  try {
+    localStorage.setItem('outliner:collapsed', JSON.stringify([...collapsedBlocks.value]));
+  } catch { /* ignore */ }
+}
+
+export function isCollapsed(blockId: string): boolean {
+  return collapsedBlocks.value.has(blockId);
+}
+
+export function toggleCollapse(blockId: string) {
+  const next = new Set(collapsedBlocks.value);
+  if (next.has(blockId)) next.delete(blockId);
+  else next.add(blockId);
+  collapsedBlocks.value = next;
+  persistCollapsed();
+}
+
+// Load on module init
+loadCollapsed();
 
 /** Check if `blockId` is a descendant of `ancestorId`. */
 export function isDescendant(blockId: string, ancestorId: string): boolean {

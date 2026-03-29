@@ -10,12 +10,13 @@ import {
   parseMarkdownToItems, insertBlocksAfter,
   fixHeadingSections,
   exportPage, exportAllPages, importPage, importAllPages,
-  hasChildren, toggleCollapse, moveBlock, validateTree,
+  hasChildren, toggleCollapse, isCollapsed, collapsedBlocks, moveBlock, validateTree,
   parseWikiLinks, renderContent, isTableRow, isTableSeparator, parseTableCells, parseHeading, parseTodoStatus, cycleTodoStatus, toggleCheckbox,
   getTableGrid, createTable, insertTableRow, insertTableCol, reorderTableRow, reorderTableCol, deleteTableRow, deleteTableCol,
   getBacklinks,
   navigateTo, navigateById, findPageBySlug, currentPage, activeBlockId,
   isJournalSlug, formatJournalTitle, pageTitle, pageList, isTentativePage,
+  beginUndo, commitUndo, undo, redo,
 } from '../src/db';
 
 const encode = (s: string) => new TextEncoder().encode(s);
@@ -1805,21 +1806,22 @@ describe('collapse', () => {
     expect(hasChildren('2')).toBe(false);
   });
 
-  it('toggleCollapse sets collapsed field', () => {
+  it('toggleCollapse toggles local collapsed state', () => {
     const pageId = getOrCreatePage('p');
     saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
-    expect(blockData.value['1'].collapsed).toBeFalsy();
+    expect(isCollapsed('1')).toBe(false);
     toggleCollapse('1');
-    expect(blockData.value['1'].collapsed).toBe(true);
+    expect(isCollapsed('1')).toBe(true);
     toggleCollapse('1');
-    expect(blockData.value['1'].collapsed).toBe(false);
+    expect(isCollapsed('1')).toBe(false);
   });
 
   it('flattenTree hides children of collapsed blocks', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'root', pageId, parent: null, order: 0, collapsed: true });
+    saveBlock({ id: '1', content: 'root', pageId, parent: null, order: 0 });
     saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
     saveBlock({ id: '3', content: 'root2', pageId, parent: null, order: 1 });
+    toggleCollapse('1');
 
     const flat = flattenTree(buildTree(pageId));
     expect(flat.map(b => b.id)).toEqual(['1', '3']);
@@ -1838,9 +1840,10 @@ describe('collapse', () => {
   it('deeply nested collapse only hides direct subtree', () => {
     const pageId = getOrCreatePage('p');
     saveBlock({ id: '1', content: 'root', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0, collapsed: true });
+    saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
     saveBlock({ id: '3', content: 'grandchild', pageId, parent: '2', order: 0 });
     saveBlock({ id: '4', content: 'child2', pageId, parent: '1', order: 1 });
+    toggleCollapse('2');
 
     const flat = flattenTree(buildTree(pageId));
     expect(flat.map(b => b.id)).toEqual(['1', '2', '4']);
@@ -2125,5 +2128,117 @@ describe('moveBlock + fixHeadingSections integration', () => {
     expect(blockData.value['3'].parent).toBeNull();
     // item B was after the heading → captured as child
     expect(blockData.value['2'].parent).toBe('3');
+  });
+});
+
+describe('undo / redo', () => {
+  /** Create a page and set it as current (undo is per-page). */
+  function setup() {
+    const pageId = getOrCreatePage('p');
+    currentPage.value = pageId;
+    return pageId;
+  }
+
+  it('undoes a single saveBlock', () => {
+    const pageId = setup();
+    saveBlock({ id: '1', content: 'original', pageId, parent: null, order: 0 });
+    saveBlock({ ...blockData.value['1'], content: 'edited' });
+
+    expect(blockData.value['1'].content).toBe('edited');
+    undo();
+    expect(blockData.value['1'].content).toBe('original');
+  });
+
+  it('redoes after undo', () => {
+    const pageId = setup();
+    saveBlock({ id: '1', content: 'original', pageId, parent: null, order: 0 });
+    saveBlock({ ...blockData.value['1'], content: 'edited' });
+
+    undo();
+    expect(blockData.value['1'].content).toBe('original');
+    redo();
+    expect(blockData.value['1'].content).toBe('edited');
+  });
+
+  it('undoes a grouped operation', () => {
+    const pageId = setup();
+    saveBlock({ id: '1', content: 'hello world', pageId, parent: null, order: 0 });
+
+    // Simulate Enter: split into two blocks
+    beginUndo('split');
+    saveBlock({ ...blockData.value['1'], content: 'hello' });
+    saveBlock({ id: '2', content: ' world', pageId, parent: null, order: 1 });
+    commitUndo();
+
+    expect(blockData.value['1'].content).toBe('hello');
+    expect(blockData.value['2']).toBeDefined();
+
+    undo();
+    expect(blockData.value['1'].content).toBe('hello world');
+    expect(blockData.value['2']).toBeUndefined();
+  });
+
+  it('undoes deleteBlock (restores deleted blocks)', () => {
+    const pageId = setup();
+    saveBlock({ id: '1', content: 'parent', pageId, parent: null, order: 0 });
+    saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
+
+    beginUndo('delete');
+    deleteBlock('1');
+    commitUndo();
+
+    expect(blockData.value['1']).toBeUndefined();
+    expect(blockData.value['2']).toBeUndefined();
+
+    undo();
+    expect(blockData.value['1']).toBeDefined();
+    expect(blockData.value['2']).toBeDefined();
+    expect(blockData.value['1'].content).toBe('parent');
+    expect(blockData.value['2'].content).toBe('child');
+    expect(blockData.value['2'].parent).toBe('1');
+  });
+
+  it('redo after undo of delete', () => {
+    const pageId = setup();
+    saveBlock({ id: '1', content: 'item', pageId, parent: null, order: 0 });
+
+    beginUndo('delete');
+    deleteBlock('1');
+    commitUndo();
+
+    undo();
+    expect(blockData.value['1']).toBeDefined();
+
+    redo();
+    expect(blockData.value['1']).toBeUndefined();
+  });
+
+  it('new edit clears redo stack', () => {
+    const pageId = setup();
+    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
+    saveBlock({ ...blockData.value['1'], content: 'b' });
+
+    undo();
+    expect(blockData.value['1'].content).toBe('a');
+
+    // New edit should clear redo
+    saveBlock({ ...blockData.value['1'], content: 'c' });
+    redo(); // should do nothing
+    expect(blockData.value['1'].content).toBe('c');
+  });
+
+  it('undoes moveBlock', () => {
+    const pageId = setup();
+    saveBlock({ id: '1', content: 'A', pageId, parent: null, order: 0 });
+    saveBlock({ id: '2', content: 'B', pageId, parent: null, order: 1 });
+
+    beginUndo('move');
+    moveBlock('2', '1', 'before');
+    commitUndo();
+
+    expect(blockData.value['2'].order).toBeLessThan(blockData.value['1'].order);
+
+    undo();
+    expect(blockData.value['2'].order).toBeGreaterThan(blockData.value['1'].order);
   });
 });

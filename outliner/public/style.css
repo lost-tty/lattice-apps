@@ -484,7 +484,7 @@ body {
 }
 
 .block-tree-tail {
-  min-height: 50vh;
+  min-height: 15vh;
   cursor: text;
 }
 
@@ -615,9 +615,14 @@ body {
   justify-content: center;
 }
 
-.toolbar-btn:hover {
+.toolbar-btn:hover:not(:disabled) {
   color: var(--text-muted);
   background: var(--border);
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
 }
 
 .toolbar-btn svg {
