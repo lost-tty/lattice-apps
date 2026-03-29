@@ -277,11 +277,14 @@ type UndoEntry = { label: string; patches: Patch[] };
 
 const MAX_UNDO = 200;
 
+const hasSessionStorage = typeof sessionStorage !== 'undefined';
+
 function storageKey(pageId: string, type: 'undo' | 'redo') {
   return `outliner:${type}:${pageId}`;
 }
 
 function loadStack(pageId: string, type: 'undo' | 'redo'): UndoEntry[] {
+  if (!hasSessionStorage) return [];
   try {
     const raw = sessionStorage.getItem(storageKey(pageId, type));
     return raw ? JSON.parse(raw) : [];
@@ -289,6 +292,7 @@ function loadStack(pageId: string, type: 'undo' | 'redo'): UndoEntry[] {
 }
 
 function persistStack(pageId: string, type: 'undo' | 'redo', stack: UndoEntry[]) {
+  if (!hasSessionStorage) return;
   const key = storageKey(pageId, type);
   const json = JSON.stringify(stack);
   while (true) {
@@ -299,7 +303,7 @@ function persistStack(pageId: string, type: 'undo' | 'redo', stack: UndoEntry[])
       if (stack.length > 1) {
         stack.shift();
       } else {
-        sessionStorage.removeItem(key);
+        try { sessionStorage.removeItem(key); } catch {}
         return;
       }
     }
