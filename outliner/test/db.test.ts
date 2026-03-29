@@ -1071,6 +1071,17 @@ describe('renderContent', () => {
     expect(renderContent('==important==')).toContain('<mark>important</mark>');
   });
 
+  it('renders colored highlight', () => {
+    expect(renderContent('==text==[.hl-3]')).toContain('<mark class="hl-3">text</mark>');
+  });
+
+  it('renders colored highlight without affecting surrounding text', () => {
+    const html = renderContent('before ==text==[.hl-1] after');
+    expect(html).toContain('before ');
+    expect(html).toContain('<mark class="hl-1">text</mark>');
+    expect(html).toContain(' after');
+  });
+
   it('renders hyperlinks', () => {
     const html = renderContent('see [Docs](https://example.com)');
     expect(html).toContain('class="hyperlink"');

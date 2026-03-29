@@ -1998,7 +1998,10 @@
     html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
     html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
     html = html.replace(/~~(.+?)~~/g, "<s>$1</s>");
-    html = html.replace(/==(.+?)==/g, "<mark>$1</mark>");
+    html = html.replace(
+      /==(.+?)==(?:\[\.hl-(\d+)\])?/g,
+      (_4, text2, n3) => n3 ? `<mark class="hl-${n3}">${text2}</mark>` : `<mark>${text2}</mark>`
+    );
     const tags = [];
     html = html.replace(/<[^>]+>/g, (tag) => {
       tags.push(tag);

@@ -1534,7 +1534,9 @@ export function renderContent(text: string): string {
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
   html = html.replace(/~~(.+?)~~/g, '<s>$1</s>');
-  html = html.replace(/==(.+?)==/g, '<mark>$1</mark>');
+  html = html.replace(/==(.+?)==(?:\[\.hl-(\d+)\])?/g, (_, text, n) =>
+    n ? `<mark class="hl-${n}">${text}</mark>` : `<mark>${text}</mark>`,
+  );
 
   // Protect existing <a> and <span> tags from bare-URL matching, then auto-link bare URLs.
   const tags: string[] = [];

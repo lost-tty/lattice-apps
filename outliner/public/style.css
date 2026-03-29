@@ -848,8 +848,25 @@ code {
 
 mark {
   background: var(--highlight);
-  padding: 0 2px;
-  border-radius: 2px;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border-radius: 4px;
+}
+
+mark.hl-1 { background: lch(93% 7 11);  color: lch(35% 100 11);  }  /* red */
+mark.hl-2 { background: lch(93% 7 145); color: lch(35% 100 145); }  /* green */
+mark.hl-3 { background: lch(93% 7 90);  color: lch(35% 100 90);  }  /* yellow */
+mark.hl-4 { background: lch(93% 7 250); color: lch(35% 100 250); }  /* blue */
+mark.hl-5 { background: lch(93% 7 310); color: lch(35% 100 310); }  /* purple */
+mark.hl-6 { background: lch(93% 7 195); color: lch(35% 100 195); }  /* cyan */
+
+@media (prefers-color-scheme: dark) {
+  mark.hl-1 { background: lch(25% 20 11);  color: lch(75% 45 11);  }
+  mark.hl-2 { background: lch(25% 20 145); color: lch(75% 45 145); }
+  mark.hl-3 { background: lch(25% 20 90);  color: lch(75% 45 90);  }
+  mark.hl-4 { background: lch(25% 20 250); color: lch(75% 45 250); }
+  mark.hl-5 { background: lch(25% 20 310); color: lch(75% 45 310); }
+  mark.hl-6 { background: lch(25% 20 195); color: lch(75% 45 195); }
 }
 
 s {
