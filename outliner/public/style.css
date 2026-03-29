@@ -742,6 +742,19 @@ body {
   transform: rotate(0deg);
 }
 
+/* Collapsed ellipsis indicator */
+.collapsed-ellipsis {
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.collapsed-ellipsis:hover {
+  color: var(--text-muted);
+  background: var(--border);
+}
+
 /* Table gutter: top-left corner to avoid collision with row handles */
 .gutter.table-gutter {
   top: 0;

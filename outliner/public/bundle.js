@@ -2584,13 +2584,24 @@
       pendingActivation = null;
       setCursor(el, cursor, prefix.length);
     }, [isActive]);
+    const collapsed = hasKids && isCollapsed(node.id);
     _(() => {
       if (isActive || !ref.current) return;
       const { status: status2, text: statusText } = parseTodoStatus(node.content);
       const { text } = parseHeading(statusText);
       const marker = status2 ? `<span class="todo-marker ${status2}"></span>` : "";
       ref.current.innerHTML = marker + `<span>${renderContent(text) || "<br>"}</span>`;
-    }, [isActive, node.content]);
+      if (collapsed) {
+        const el = document.createElement("span");
+        el.className = "collapsed-ellipsis";
+        el.textContent = "\u2026";
+        el.onclick = (e4) => {
+          e4.stopPropagation();
+          toggleCollapse(node.id);
+        };
+        ref.current.appendChild(el);
+      }
+    }, [isActive, node.content, collapsed]);
     function saveFromEditor() {
       const raw = ref.current?.textContent || "";
       const { type, content } = parseRaw(raw);
@@ -3255,16 +3266,33 @@
               class: "block-tree-tail",
               onClick: () => {
                 if (flat.length === 0) return;
-                const last = flat[flat.length - 1];
-                const lastBlock = blockData.value[last.id];
-                if (lastBlock && lastBlock.content === "" && lastBlock.type !== "table") {
-                  activateBlock(last.id, "start");
-                  return;
+                let parentId = null;
+                for (let i5 = flat.length - 1; i5 >= 0; i5--) {
+                  if (flat[i5].depth === 0 && blockKind(blockData.value[flat[i5].id]) === "heading") {
+                    parentId = flat[i5].id;
+                    break;
+                  }
                 }
-                beginUndo("new block");
-                const newId = createBlockAfter(last.id, "", "paragraph");
-                commitUndo();
-                activateBlock(newId, "start");
+                const siblings = flat.filter((b3) => {
+                  const block = blockData.value[b3.id];
+                  return block && block.parent === parentId && block.type !== "table";
+                });
+                const lastSibling = siblings[siblings.length - 1];
+                if (lastSibling) {
+                  const block = blockData.value[lastSibling.id];
+                  if (block && block.content === "") {
+                    activateBlock(lastSibling.id, "start");
+                    return;
+                  }
+                }
+                const allAtLevel = flat.filter((b3) => blockData.value[b3.id]?.parent === parentId);
+                const anchor = allAtLevel[allAtLevel.length - 1];
+                if (anchor) {
+                  beginUndo("new block");
+                  const newId = createBlockAfter(anchor.id, "", "paragraph");
+                  commitUndo();
+                  activateBlock(newId, "start");
+                }
               }
             }
           )

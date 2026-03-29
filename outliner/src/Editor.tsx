@@ -160,13 +160,21 @@ function BlockItem({ node }: { node: FlatBlock }) {
   }, [isActive]);
 
   // View mode: render formatted HTML (Preact never owns children).
+  const collapsed = hasKids && isCollapsed(node.id);
   useLayoutEffect(() => {
     if (isActive || !ref.current) return;
     const { status, text: statusText } = parseTodoStatus(node.content);
     const { text } = parseHeading(statusText);
     const marker = status ? `<span class="todo-marker ${status}"></span>` : '';
     ref.current.innerHTML = marker + `<span>${renderContent(text) || '<br>'}</span>`;
-  }, [isActive, node.content]);
+    if (collapsed) {
+      const el = document.createElement('span');
+      el.className = 'collapsed-ellipsis';
+      el.textContent = '…';
+      el.onclick = (e) => { e.stopPropagation(); toggleCollapse(node.id); };
+      ref.current.appendChild(el);
+    }
+  }, [isActive, node.content, collapsed]);
 
   /** Save current editor text to the data model, re-parsing type from prefix. */
   function saveFromEditor() {
@@ -939,17 +947,36 @@ function PageSection({ pageId, titleClickable }: { pageId: string; titleClickabl
             class="block-tree-tail"
             onClick={() => {
               if (flat.length === 0) return;
-              const last = flat[flat.length - 1];
-              const lastBlock = blockData.value[last.id];
-              // If the last visible block is already empty, just focus it
-              if (lastBlock && lastBlock.content === '' && lastBlock.type !== 'table') {
-                activateBlock(last.id, 'start');
-                return;
+              // Find the right insertion level: last heading's children, or root
+              let parentId: string | null = null;
+              for (let i = flat.length - 1; i >= 0; i--) {
+                if (flat[i].depth === 0 && blockKind(blockData.value[flat[i].id]) === 'heading') {
+                  parentId = flat[i].id;
+                  break;
+                }
               }
-              beginUndo('new block');
-              const newId = createBlockAfter(last.id, '', 'paragraph');
-              commitUndo();
-              activateBlock(newId, 'start');
+              // Find the last sibling at that level
+              const siblings = flat.filter(b => {
+                const block = blockData.value[b.id];
+                return block && block.parent === parentId && block.type !== 'table';
+              });
+              const lastSibling = siblings[siblings.length - 1];
+              if (lastSibling) {
+                const block = blockData.value[lastSibling.id];
+                if (block && block.content === '') {
+                  activateBlock(lastSibling.id, 'start');
+                  return;
+                }
+              }
+              // Create after the last block at that level
+              const allAtLevel = flat.filter(b => blockData.value[b.id]?.parent === parentId);
+              const anchor = allAtLevel[allAtLevel.length - 1];
+              if (anchor) {
+                beginUndo('new block');
+                const newId = createBlockAfter(anchor.id, '', 'paragraph');
+                commitUndo();
+                activateBlock(newId, 'start');
+              }
             }}
           />
         </div>
