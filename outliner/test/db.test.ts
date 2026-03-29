@@ -428,7 +428,7 @@ describe('joinBlockWithPrevious', () => {
     saveBlock({ id: '1', content: 'hello', pageId, parent: null, order: 0 });
     saveBlock({ id: '2', content: 'world', pageId, parent: null, order: 1 });
 
-    const result = joinBlockWithPrevious('2');
+    const result = joinBlockWithPrevious('2', 'world');
     expect(result).not.toBeNull();
     expect(result!.prevId).toBe('1');
     expect(blockData.value['1'].content).toBe('helloworld');
@@ -441,7 +441,7 @@ describe('joinBlockWithPrevious', () => {
     saveBlock({ id: '1', content: 'hello ', pageId, parent: null, order: 0 });
     saveBlock({ id: '2', content: 'world', pageId, parent: null, order: 1 });
 
-    const result = joinBlockWithPrevious('2');
+    const result = joinBlockWithPrevious('2', 'world');
     expect(result).not.toBeNull();
     expect(result!.prevId).toBe('1');
     expect(blockData.value['1'].content).toBe('hello world');
@@ -453,7 +453,7 @@ describe('joinBlockWithPrevious', () => {
     const pageId = getOrCreatePage('p');
     saveBlock({ id: '1', content: 'only block', pageId, parent: null, order: 0 });
 
-    const result = joinBlockWithPrevious('1');
+    const result = joinBlockWithPrevious('1', 'only block');
     expect(result).toBeNull();
     expect(blockData.value['1'].content).toBe('only block');
   });
@@ -464,7 +464,7 @@ describe('joinBlockWithPrevious', () => {
     saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
     saveBlock({ id: '3', content: 'next', pageId, parent: null, order: 1 });
 
-    const result = joinBlockWithPrevious('3');
+    const result = joinBlockWithPrevious('3', 'next');
     expect(result!.prevId).toBe('2');
     expect(blockData.value['2'].content).toBe('childnext');
     expect(blockData.value['3']).toBeUndefined();
@@ -475,7 +475,7 @@ describe('joinBlockWithPrevious', () => {
     saveBlock({ id: '1', content: 'hello', pageId, parent: null, order: 0 });
     saveBlock({ id: '2', content: '', pageId, parent: null, order: 1 });
 
-    const result = joinBlockWithPrevious('2');
+    const result = joinBlockWithPrevious('2', '');
     expect(result).not.toBeNull();
     expect(result!.prevId).toBe('1');
     expect(blockData.value['1'].content).toBe('hello');

@@ -814,10 +814,7 @@ body {
   background: var(--active-bg);
 }
 
-/* Hide the bullet dot when editing (the raw "- " prefix in the text replaces it) */
-.block:has(.block-content.editing) > .bullet::after {
-  visibility: hidden;
-}
+
 
 /* Horizontal rule block */
 .block > hr {

@@ -866,7 +866,7 @@ export function outdentBlock(blockId: string) {
 /** Join a block onto the end of the previous block in the flat tree.
  * Returns { prevId, cursorPos } on success, or null if there is no previous block.
  * cursorPos is the offset in the merged content where the cursor should be placed. */
-export function joinBlockWithPrevious(blockId: string): { prevId: string; cursorPos: number } | null {
+export function joinBlockWithPrevious(blockId: string, currentContent: string): { prevId: string; cursorPos: number } | null {
   const block = blockData.value[blockId];
   if (!block) return null;
   const tree = buildTree(block.pageId);
@@ -875,7 +875,6 @@ export function joinBlockWithPrevious(blockId: string): { prevId: string; cursor
   if (idx <= 0) return null;
   const prev = flat[idx - 1];
   const prevContent = prev.content;
-  const currentContent = block.content;
   const joinedContent = prevContent + currentContent;
   const cursorPos = prevContent.length;
   saveBlock({ ...blockData.value[prev.id], content: joinedContent });

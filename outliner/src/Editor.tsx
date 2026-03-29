@@ -14,7 +14,7 @@ import type { BlockNode } from './types';
 import {
   activeBlockId, currentPage, blockData,
   saveBlock, deleteBlock, buildTree, flattenTree, hasChildren, toggleCollapse,
-  createBlockAfter, createChildBlock, isParagraph, indentBlock, outdentBlock, removeBlock, joinBlockWithPrevious, moveBlock, isDescendant,
+  createBlockAfter, createChildBlock, indentBlock, outdentBlock, removeBlock, joinBlockWithPrevious, moveBlock, isDescendant,
   blockKind, canAcceptChildren, isCollapsed,
   createTable, insertTableRow, insertTableCol, reorderTableRow, reorderTableCol, deleteTableRow, deleteTableCol,
   parseMarkdownToItems, insertBlocksAfter, exportPage,
@@ -122,44 +122,31 @@ function startBlockDrag(e: DragEvent, blockId: string) {
 
 // --- Block component ---
 
-/** Parse raw editor text into block type + content.
- *  "- text" → bullet; everything else → paragraph.
- *  Headings/todos are stored inside content, so no special handling here. */
-function parseRaw(raw: string): { type: 'bullet' | 'paragraph'; content: string } {
-  if (raw.startsWith('- ') || raw.startsWith('* ') || raw.startsWith('+ ')) {
-    return { type: 'bullet', content: raw.slice(2) };
-  }
-  return { type: 'paragraph', content: raw };
-}
-
-/** The prefix shown in the editor for a given block type. */
-function editPrefix(type: string | undefined): string {
-  return type === 'paragraph' ? '' : '- ';
-}
-
 function BlockItem({ node }: { node: FlatBlock }) {
   const isActive = activeBlockId.value === node.id;
   const ref = useRef<HTMLDivElement>(null);
   const hasKids = hasChildren(node.id);
   const isHr = node.content === '---';
-  const prefix = editPrefix(node.type);
 
-  // Enter edit mode: set raw markdown text, focus, and place cursor.
-  // useLayoutEffect runs synchronously after DOM commit (before paint).
+  // Enter edit mode: swap rendered HTML for plain text, preserve caret.
   useLayoutEffect(() => {
     if (!isActive || !ref.current) return;
     const el = ref.current;
-    el.textContent = prefix + node.content;
-    el.focus();
-    // Read cursor intent — ignore if it was meant for a different block
-    const cursor = (pendingActivation?.blockId === node.id)
-      ? pendingActivation.cursor
-      : 'end';
+    // If activated programmatically (Enter/Tab/Arrow), set content and place cursor.
+    // If activated by click, the browser already placed the caret — just swap to plain text.
+    const activation = pendingActivation?.blockId === node.id ? pendingActivation : null;
     pendingActivation = null;
-    setCursor(el, cursor, prefix.length);
+    el.textContent = node.content;
+    el.focus();
+    if (activation) {
+      setCursor(el, activation.cursor, 0);
+    } else {
+      // Place cursor at end as fallback (click handler places it before this runs)
+      setCursor(el, 'end', 0);
+    }
   }, [isActive]);
 
-  // View mode: render formatted HTML (Preact never owns children).
+  // View mode: render formatted HTML.
   const collapsed = hasKids && isCollapsed(node.id);
   useLayoutEffect(() => {
     if (isActive || !ref.current) return;
@@ -176,22 +163,19 @@ function BlockItem({ node }: { node: FlatBlock }) {
     }
   }, [isActive, node.content, collapsed]);
 
-  /** Save current editor text to the data model, re-parsing type from prefix. */
+  /** Read content from the editor and save if changed. */
   function saveFromEditor() {
-    const raw = ref.current?.textContent || '';
-    const { type, content } = parseRaw(raw);
+    const content = ref.current?.textContent || '';
     const current = blockData.value[node.id];
     if (!current) return;
-    const currentType = current.type || 'bullet';
-    if (content !== current.content || type !== currentType) {
-      saveBlock({ ...current, content, type });
+    if (content !== current.content) {
+      saveBlock({ ...current, content });
     }
   }
 
   function handleKeyDown(e: KeyboardEvent) {
     const el = ref.current!;
-    const raw = el.textContent || '';
-    const { type: parsedType, content: parsedContent } = parseRaw(raw);
+    const content = el.textContent || '';
 
     // Undo / Redo
     if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
@@ -205,7 +189,7 @@ function BlockItem({ node }: { node: FlatBlock }) {
       e.preventDefault();
 
       // If the block content is a table row, convert it to a table
-      const cells = parseTableCells(parsedContent);
+      const cells = parseTableCells(content);
       if (cells && cells.length > 0) {
         beginUndo('create table');
         const tableId = createTable(node.id, [cells]);
@@ -217,66 +201,50 @@ function BlockItem({ node }: { node: FlatBlock }) {
       }
 
       const offset = getCursorOffset(el);
-      const rawBefore = raw.slice(0, offset);
-      const rawAfter = raw.slice(offset);
+      const before = content.slice(0, offset);
+      const after = content.slice(offset);
 
-      if (rawBefore === '') {
-        // Cursor at position 0: insert empty block before, keep content in new block
+      if (before === '') {
         beginUndo('split block');
         saveBlock({ ...node, content: '', type: 'paragraph' });
-        const { type: afterType, content: afterContent } = parseRaw(raw);
-        const newId = createBlockAfter(node.id, afterContent, afterType);
+        const newId = createBlockAfter(node.id, content, node.type);
         commitUndo();
         activateBlock(newId, 'start');
         return;
       }
 
       beginUndo('split block');
-      const { type: beforeType, content: beforeContent } = parseRaw(rawBefore);
-      el.textContent = rawBefore;
-      saveBlock({ ...node, content: beforeContent, type: beforeType });
+      saveBlock({ ...node, content: before });
 
       // Headings act as parents — Enter creates a child block, not a sibling
-      const { level } = parseHeading(beforeContent);
+      const { level } = parseHeading(before);
       if (level) {
-        const newId = createChildBlock(node.id, rawAfter);
+        const newId = createChildBlock(node.id, after);
         commitUndo();
         activateBlock(newId, 'start');
         return;
       }
 
-      const newId = createBlockAfter(node.id, rawAfter, beforeType);
+      const newId = createBlockAfter(node.id, after, node.type);
       commitUndo();
       activateBlock(newId, 'start');
       return;
     }
 
     if (e.key === 'Backspace') {
-      // Cursor at the very start → join with previous block
-      if (getCursorOffset(el) === 0 && raw !== '') {
+      if (getCursorOffset(el) === 0 && content !== '') {
         e.preventDefault();
         beginUndo('join blocks');
-        saveFromEditor();
-        const joined = joinBlockWithPrevious(node.id);
+        const joined = joinBlockWithPrevious(node.id, content);
         commitUndo();
         if (joined) activateBlock(joined.prevId, joined.cursorPos);
         return;
       }
 
-      // Only the bullet prefix remains → demote to empty paragraph
-      if (raw === '- ' || raw === '* ' || raw === '+ ') {
-        e.preventDefault();
-        el.textContent = '';
-        const current = blockData.value[node.id];
-        if (current) saveBlock({ ...current, content: '', type: 'paragraph' });
-        return;
-      }
-
-      // Completely empty → try to join or delete
-      if (raw === '') {
+      if (content === '') {
         e.preventDefault();
         beginUndo('delete block');
-        const joined = joinBlockWithPrevious(node.id);
+        const joined = joinBlockWithPrevious(node.id, '');
         if (joined) {
           activateBlock(joined.prevId, joined.cursorPos);
         } else {
@@ -312,7 +280,7 @@ function BlockItem({ node }: { node: FlatBlock }) {
     }
 
     if (e.key === 'ArrowDown') {
-      if (getCursorOffset(el) === raw.length) {
+      if (getCursorOffset(el) === content.length) {
         const flat = flattenTree(buildTree(node.pageId));
         const idx = flat.findIndex(b => b.id === node.id);
         if (idx < flat.length - 1) {
@@ -327,9 +295,6 @@ function BlockItem({ node }: { node: FlatBlock }) {
 
   function handleBlur() {
     if (!ref.current) return;
-    // Only save from editor if this block is still active.
-    // If Enter/Tab/Arrow already saved and changed activeBlockId, skip —
-    // the view useEffect may have overwritten the DOM content by now.
     if (activeBlockId.value === node.id) {
       saveFromEditor();
       activeBlockId.value = null;
@@ -338,47 +303,42 @@ function BlockItem({ node }: { node: FlatBlock }) {
 
   function handlePaste(e: ClipboardEvent) {
     const text = e.clipboardData?.getData('text/plain') ?? '';
-    // Single-line paste: let the browser insert it as plain text.
     if (!text.includes('\n')) return;
 
     e.preventDefault();
 
     const el = ref.current!;
     const offset = getCursorOffset(el);
-    const raw = el.textContent ?? '';
-    const { content: beforeContent } = parseRaw(raw.slice(0, offset));
-    const rawAfter = raw.slice(offset);
+    const content = el.textContent ?? '';
+    const before = content.slice(0, offset);
+    const after = content.slice(offset);
 
     const items = parseMarkdownToItems(text);
     if (items.length === 0) return;
 
-    // Merge the cursor split with the first and last pasted items.
     const merged = items.map((item, i) => ({
       ...item,
       content:
-        (i === 0 ? beforeContent : '') + item.content + (i === items.length - 1 ? rawAfter : ''),
+        (i === 0 ? before : '') + item.content + (i === items.length - 1 ? after : ''),
     }));
 
     beginUndo('paste');
-    // The current block takes the first item's content.
     saveBlock({ ...node, content: merged[0].content });
 
     if (merged.length === 1) {
-      // Everything fit in one block — place cursor after the pasted text.
       commitUndo();
-      activateBlock(node.id, beforeContent.length + items[0].content.length);
+      activateBlock(node.id, before.length + items[0].content.length);
       return;
     }
 
-    // Remaining items become new blocks; cursor lands before the "after" text.
     const lastId = insertBlocksAfter(node.id, merged.slice(1));
     commitUndo();
     const lastContent = merged[merged.length - 1].content;
-    activateBlock(lastId, lastContent.length - rawAfter.length);
+    activateBlock(lastId, lastContent.length - after.length);
   }
 
   function handleClick(e: MouseEvent) {
-    if (isActive) return; // let browser handle cursor placement in contentEditable
+    if (isActive) return;
     const target = e.target as HTMLElement;
     if (target.classList.contains('wiki-link') || target.classList.contains('tag')) {
       e.stopPropagation();
@@ -388,7 +348,7 @@ function BlockItem({ node }: { node: FlatBlock }) {
     }
     if (target.classList.contains('hyperlink')) {
       e.stopPropagation();
-      return; // let the <a> handle navigation
+      return;
     }
     if (target.classList.contains('md-checkbox')) {
       e.stopPropagation();
@@ -402,13 +362,7 @@ function BlockItem({ node }: { node: FlatBlock }) {
       if (current) saveBlock({ ...current, content: cycleTodoStatus(current.content) });
       return;
     }
-    // Defer activation to the next frame so the browser's click/mouseup caret
-    // placement is fully resolved before we set content and place the cursor.
-    // This eliminates the race where the browser overrides our caret position.
-    const id = node.id;
-    requestAnimationFrame(() => {
-      activateBlock(id, 'end');
-    });
+    activeBlockId.value = node.id;
   }
 
   // --- Drag handlers ---

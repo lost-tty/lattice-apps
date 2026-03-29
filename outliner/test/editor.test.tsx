@@ -40,11 +40,10 @@ describe('Editor focus', () => {
 
     const editDiv = document.querySelector('.block-content.editing') as HTMLElement;
     expect(editDiv).not.toBeNull();
-    // Bullet blocks show "- " prefix in edit mode
-    expect(editDiv.textContent).toBe('- hello world');
+    expect(editDiv.textContent).toBe('hello world');
 
     // Simulate Enter: save before, create new block, switch active
-    editDiv.textContent = '- hello';
+    editDiv.textContent = 'hello';
     saveBlock({ ...blockData.value['1'], content: 'hello' });
     const newId = createBlockAfter('1', ' world');
     activeBlockId.value = newId;
@@ -75,28 +74,26 @@ describe('Editor focus', () => {
 
     const editDiv = document.querySelector('.block-content.editing') as HTMLElement;
     expect(editDiv).not.toBeNull();
-    expect(editDiv.textContent).toBe('- world');
+    expect(editDiv.textContent).toBe('world');
 
     // Simulate what backspace at position 0 does:
     // 1. saveFromEditor (save current block)
     // 2. joinBlockWithPrevious (merge into block '1')
-    // 3. set cursorPlacement and activeBlockId to block '1'
+    // 3. activate block '1'
     saveBlock({ ...blockData.value['2'], content: 'world' });
-    const joined = joinBlockWithPrevious('2');
+    const joined = joinBlockWithPrevious('2', 'world');
     expect(joined).not.toBeNull();
     expect(joined!.prevId).toBe('1');
     activeBlockId.value = '1';
 
-    // In a real browser, blur fires on block '2's div during Preact's commit
     editDiv.dispatchEvent(new Event('blur'));
 
     await flush();
 
-    // Block '1' should now be active and show the MERGED content, not the old "hello"
     const mergedDiv = document.querySelector('.block-content.editing') as HTMLElement;
     expect(mergedDiv).not.toBeNull();
     expect(blockData.value['1'].content).toBe('helloworld');
-    expect(mergedDiv.textContent).toBe('- helloworld');
+    expect(mergedDiv.textContent).toBe('helloworld');
     expect(document.activeElement).toBe(mergedDiv);
   });
 
@@ -112,21 +109,19 @@ describe('Editor focus', () => {
     const editDiv = document.querySelector('.block-content.editing') as HTMLElement;
     expect(editDiv).not.toBeNull();
 
-    // Simulate Enter at offset 7 (after "- hello")
-    editDiv.textContent = '- hello';
+    // Simulate Enter at offset 5 (after "hello")
+    editDiv.textContent = 'hello';
     saveBlock({ ...blockData.value['1'], content: 'hello' });
     const newId = createBlockAfter('1', ' world');
     activeBlockId.value = newId;
 
-    // Simulate blur firing during Preact commit (before effects run)
     editDiv.dispatchEvent(new Event('blur'));
 
     await flush();
 
     const newEditDiv = document.querySelector('.block-content.editing') as HTMLElement;
     expect(newEditDiv).not.toBeNull();
-    // New bullet block shows "- " prefix + content
-    expect(newEditDiv.textContent).toBe('-  world');
+    expect(newEditDiv.textContent).toBe(' world');
     expect(document.activeElement).toBe(newEditDiv);
   });
 });
