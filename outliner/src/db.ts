@@ -332,6 +332,50 @@ export function flattenTree(nodes: BlockNode[], depth: number = 0): FlatBlock[] 
   return result;
 }
 
+/** Validate and repair the block tree for a page.
+ *  1. Finds blocks with dangling parent references (parent doesn't exist)
+ *     and reparents them to root.
+ *  2. Walks the flat tree and ensures depth consistency — a block can only
+ *     nest one level deeper than the previous deepest block.
+ *  Returns the number of blocks repaired. */
+export function validateTree(pageId: string): number {
+  let repaired = 0;
+
+  // Step 1: fix dangling parent references (parent block doesn't exist)
+  const allBlocks = Object.values(blockData.value).filter(b => b.pageId === pageId);
+  for (const block of allBlocks) {
+    if (block.parent && !blockData.value[block.parent]) {
+      saveBlock({ ...block, parent: null });
+      repaired++;
+    }
+  }
+
+  // Step 2: validate depth consistency in the (now connected) tree
+  const flat = flattenTree(buildTree(pageId));
+  const lastAtDepth: (string | null)[] = [null];
+
+  for (const b of flat) {
+    const block = blockData.value[b.id];
+    if (!block) continue;
+
+    // Clamp: a block can be at most one level deeper than the deepest seen so far
+    const maxDepth = lastAtDepth.length;
+    const effectiveDepth = Math.min(b.depth, maxDepth);
+
+    const correctParent = effectiveDepth > 0 ? (lastAtDepth[effectiveDepth - 1] ?? null) : null;
+
+    if (block.parent !== correctParent) {
+      saveBlock({ ...block, parent: correctParent });
+      repaired++;
+    }
+
+    lastAtDepth[effectiveDepth] = b.id;
+    lastAtDepth.length = effectiveDepth + 1;
+  }
+
+  return repaired;
+}
+
 /** Check if a block has children. */
 export function hasChildren(blockId: string): boolean {
   return Object.values(blockData.value).some(b => b.parent === blockId);
@@ -345,13 +389,35 @@ export function toggleCollapse(blockId: string) {
 }
 
 /** Check if `blockId` is a descendant of `ancestorId`. */
-function isDescendant(blockId: string, ancestorId: string): boolean {
+export function isDescendant(blockId: string, ancestorId: string): boolean {
   let current = blockData.value[blockId];
   while (current?.parent) {
     if (current.parent === ancestorId) return true;
     current = blockData.value[current.parent];
   }
   return false;
+}
+
+/** After a structural change, ensure heading sections capture their content.
+ *  Walks siblings at the given level in order. Non-heading blocks that follow
+ *  a heading are reparented as children of that heading. */
+export function fixHeadingSections(pageId: string, parent: string | null): void {
+  const siblings = Object.values(blockData.value)
+    .filter(b => b.pageId === pageId && b.parent === parent)
+    .sort((a, b) => a.order - b.order);
+
+  let currentHeading: string | null = null;
+
+  for (const sib of siblings) {
+    if (blockKind(sib) === 'heading') {
+      currentHeading = sib.id;
+    } else if (currentHeading) {
+      // Non-heading after a heading → should be a child of the heading
+      const children = Object.values(blockData.value)
+        .filter(b => b.pageId === pageId && b.parent === currentHeading);
+      saveBlock({ ...sib, parent: currentHeading, order: nextOrder(children) });
+    }
+  }
 }
 
 /** Move a block via drag-and-drop. position: 'before' | 'after' | 'nested' */
@@ -365,14 +431,22 @@ export function moveBlock(
   if (!block || !target || blockId === targetId) return;
   if (isDescendant(targetId, blockId)) return;
 
+  const sourceParent = block.parent;
+  const sourcePageId = block.pageId;
+
   if (position === 'nested') {
+    if (!canAcceptChildren(target)) return;
     const children = Object.values(blockData.value)
       .filter(b => b.pageId === target.pageId && b.parent === targetId)
       .sort((a, b) => a.order - b.order);
     const firstOrder = children.length > 0 ? children[0].order : 0;
     saveBlock({ ...block, parent: targetId, pageId: target.pageId, order: orderBetween(undefined, firstOrder) });
+    fixHeadingSections(target.pageId, targetId);
+    fixHeadingSections(sourcePageId, sourceParent);
     return;
   }
+
+  if (!canBeSiblingAt(block, target.pageId, target.parent)) return;
 
   const siblings = Object.values(blockData.value)
     .filter(b => b.pageId === target.pageId && b.parent === target.parent && b.id !== blockId)
@@ -389,6 +463,8 @@ export function moveBlock(
   }
 
   saveBlock({ ...block, parent: target.parent, pageId: target.pageId, order });
+  fixHeadingSections(target.pageId, target.parent);
+  fixHeadingSections(sourcePageId, sourceParent);
 }
 
 // --- Sibling / order helpers ---
@@ -426,20 +502,106 @@ function maybeRebalance(pageId: string, parent: string | null) {
   }
 }
 
+// --- Nesting predicates ---
+//
+// These predicates form the single source of truth for which blocks can
+// nest inside which, and where blocks may be placed as siblings.
+//
+// All predicates use a permit-based pattern: only explicitly allowed
+// combinations return true. Unknown block kinds are denied by default.
+//
+//  Block kinds (determined at runtime from type + content):
+//    bullet    — type is undefined or 'bullet'
+//    heading   — type === 'paragraph' AND content starts with #
+//    paragraph — type === 'paragraph' AND NOT a heading
+//    table     — type === 'table'
+//
+//  Nesting matrix:
+//
+//    canAcceptChildren   — which blocks may have children?
+//      ✓ bullet          (sub-items in a list)
+//      ✓ heading         (section contains its content)
+//      ✗ paragraph       (plain text has no sub-items in markdown)
+//      ✗ table           (cells are managed internally)
+//
+//    isStructuralBlock   — which blocks have a fixed depth?
+//      ✓ heading         (depth determined by # level, not indentation)
+//
+//    canBeSiblingAt      — which blocks may live at a given tree level?
+//      • If the level contains headings → only headings are permitted
+//      • If the level has no headings  → bullets and paragraphs are permitted
+
+type BlockKind = 'bullet' | 'heading' | 'paragraph' | 'table';
+
+/** Determine the kind of a block. */
+export function blockKind(block: Block): BlockKind {
+  if (block.type === 'table') return 'table';
+  if (block.type === 'paragraph') {
+    return parseHeading(block.content).level ? 'heading' : 'paragraph';
+  }
+  return 'bullet';
+}
+
+/** Can `block` accept children? Permit list: bullet, heading. */
+export function canAcceptChildren(block: Block): boolean {
+  const kind = blockKind(block);
+  return kind === 'bullet' || kind === 'heading';
+}
+
+/** Is `block` a structural element whose depth is fixed? Permit list: heading. */
+export function isStructuralBlock(block: Block): boolean {
+  return blockKind(block) === 'heading';
+}
+
+/** Can `block` be placed as a sibling at the given tree level?
+ *  - Level with headings: only headings permitted.
+ *  - Level without headings: bullets and paragraphs permitted. */
+export function canBeSiblingAt(block: Block, pageId: string, parent: string | null): boolean {
+  const levelKinds = new Set(
+    Object.values(blockData.value)
+      .filter(b => b.pageId === pageId && b.parent === parent)
+      .map(b => blockKind(b)),
+  );
+  const kind = blockKind(block);
+  if (kind === 'table') return true;
+  if (levelKinds.has('heading')) return kind === 'heading';
+  return kind === 'bullet' || kind === 'paragraph';
+}
+
 // --- Block operations ---
 
-/** Create a new block after `afterId`, returns the new block's ID. */
+/** Create a new block after `afterId`, returns the new block's ID.
+ *  If the level contains headings and the new block is not a heading,
+ *  it becomes a child of the anchor instead of a sibling. */
 export function createBlockAfter(afterId: string, content: string = '', type?: 'bullet' | 'paragraph'): string {
   const after = blockData.value[afterId];
   if (!after) return '';
+  const blockType = type ?? after.type ?? 'bullet';
+
+  // Build a provisional block to test predicates
+  const provisional = { content, type: blockType } as Block;
+  if (!canBeSiblingAt(provisional, after.pageId, after.parent) && canAcceptChildren(after)) {
+    return createChildBlock(afterId, content, blockType as any);
+  }
+
   const siblings = getSiblings(afterId);
   const idx = siblings.findIndex(b => b.id === afterId);
   const next = siblings[idx + 1];
   const order = orderBetween(after.order, next?.order);
   const id = crypto.randomUUID();
-  const blockType = type ?? after.type ?? 'bullet';
   saveBlock({ id, content, pageId: after.pageId, parent: after.parent, order, type: blockType });
   maybeRebalance(after.pageId, after.parent);
+  return id;
+}
+
+/** Create a new block as the last child of `parentId`. */
+export function createChildBlock(parentId: string, content: string = '', type: 'bullet' | 'paragraph' = 'bullet'): string {
+  const parent = blockData.value[parentId];
+  if (!parent) return '';
+  const children = Object.values(blockData.value)
+    .filter(b => b.pageId === parent.pageId && b.parent === parentId);
+  const id = crypto.randomUUID();
+  saveBlock({ id, content, pageId: parent.pageId, parent: parentId, order: nextOrder(children), type });
   return id;
 }
 
@@ -453,10 +615,12 @@ export function isParagraph(blockId: string): boolean {
 export function indentBlock(blockId: string) {
   const block = blockData.value[blockId];
   if (!block) return;
+  if (isStructuralBlock(block)) return;
   const siblings = getSiblings(blockId);
   const idx = siblings.findIndex(b => b.id === blockId);
   if (idx <= 0) return;
   const newParent = siblings[idx - 1];
+  if (!canAcceptChildren(newParent)) return;
   const children = Object.values(blockData.value)
     .filter(b => b.pageId === block.pageId && b.parent === newParent.id);
   saveBlock({ ...block, parent: newParent.id, order: nextOrder(children) });
@@ -468,6 +632,9 @@ export function outdentBlock(blockId: string) {
   if (!block?.parent) return;
   const parent = blockData.value[block.parent];
   if (!parent) return;
+  if (isStructuralBlock(block)) return;
+  if (isStructuralBlock(parent)) return; // can't escape a heading section
+  if (!canBeSiblingAt(block, block.pageId, parent.parent)) return;
   const parentSiblings = Object.values(blockData.value)
     .filter(b => b.pageId === block.pageId && b.parent === parent.parent)
     .sort((a, b) => a.order - b.order);
@@ -479,9 +646,7 @@ export function outdentBlock(blockId: string) {
 
 /** Join a block onto the end of the previous block in the flat tree.
  * Returns { prevId, cursorPos } on success, or null if there is no previous block.
- * cursorPos is the offset in the merged content where the cursor should be placed
- * (i.e. right before the joined-in text, after any implicit space).
- */
+ * cursorPos is the offset in the merged content where the cursor should be placed. */
 export function joinBlockWithPrevious(blockId: string): { prevId: string; cursorPos: number } | null {
   const block = blockData.value[blockId];
   if (!block) return null;
@@ -492,9 +657,8 @@ export function joinBlockWithPrevious(blockId: string): { prevId: string; cursor
   const prev = flat[idx - 1];
   const prevContent = prev.content;
   const currentContent = block.content;
-  const needsSpace = prevContent.length > 0 && !/\s$/.test(prevContent);
-  const joinedContent = prevContent + (needsSpace ? ' ' : '') + currentContent;
-  const cursorPos = prevContent.length + (needsSpace ? 1 : 0);
+  const joinedContent = prevContent + currentContent;
+  const cursorPos = prevContent.length;
   saveBlock({ ...blockData.value[prev.id], content: joinedContent });
   deleteBlock(blockId);
   return { prevId: prev.id, cursorPos };
@@ -509,7 +673,15 @@ export function removeBlock(blockId: string): string | null {
   const tree = buildTree(block.pageId);
   const flat = flattenTree(tree);
   const idx = flat.findIndex(b => b.id === blockId);
-  if (idx <= 0) return null; // don't delete the only/first block
+  if (idx <= 0) {
+    // First block: check if there are following blocks
+    if (flat.length > 1) {
+      // Delete the first block since there are other blocks
+      deleteBlock(blockId);
+      return flat[1].id;
+    }
+    return null;
+  }
   const prevId = flat[idx - 1].id;
   deleteBlock(blockId);
   return prevId;
@@ -702,8 +874,10 @@ export function deleteTableCol(tableId: string, colOrder: number): void {
 // --- Paste helpers ---
 
 /** Parse pasted text into a flat list of content+depth items.
- *  Handles both plain bullet-list markdown (`- text`, `  - text`) and
- *  indented plain text.  Depths are normalised so the shallowest line = 0. */
+ *  Handles CommonMark-style bullet lists with continuation lines,
+ *  headings, tables, and plain paragraphs.
+ *  Blank lines act as paragraph separators (never produce empty blocks).
+ *  Depths are normalised so the shallowest line = 0. */
 export type ParsedItem = {
   content: string;
   relativeDepth: number;
@@ -712,7 +886,7 @@ export type ParsedItem = {
 };
 
 export function parseMarkdownToItems(text: string): ParsedItem[] {
-  const lines = text.split('\n').filter(l => l.trim() !== '');
+  const lines = text.split('\n');
   if (lines.length === 0) return [];
 
   const result: Array<{ content: string; depth: number; type: 'bullet' | 'paragraph' | 'table-row'; cells?: string[] }> = [];
@@ -720,12 +894,24 @@ export function parseMarkdownToItems(text: string): ParsedItem[] {
   let headingDepth = -1;
   // Sorted unique indent values seen in the current heading section
   let bulletIndents: number[] = [];
+  // Track the last bullet for continuation lines
+  let lastBulletDepth = -1;
+  let lastBulletContentCol = 0;  // column where content starts (indent + "- ".length)
+  let afterBlankLine = false;
 
   for (const line of lines) {
+    // Blank lines: never produce blocks, but mark a paragraph break
+    if (line.trim() === '') {
+      afterBlankLine = true;
+      continue;
+    }
+
     // Horizontal rule: --- resets all nesting context
     if (line.trim() === '---') {
       headingDepth = -1;
       bulletIndents = [];
+      lastBulletDepth = -1;
+      afterBlankLine = false;
       result.push({ content: '---', type: 'paragraph', depth: 0 });
       continue;
     }
@@ -735,6 +921,7 @@ export function parseMarkdownToItems(text: string): ParsedItem[] {
       if (isTableSeparator(line.trim())) continue; // drop separator — it's structural, not content
       const cells = line.trim().slice(1, -1).split('|').map(c => c.trim());
       result.push({ content: line.trim(), type: 'table-row', cells, depth: headingDepth + 1 });
+      afterBlankLine = false;
       continue;
     }
 
@@ -743,6 +930,8 @@ export function parseMarkdownToItems(text: string): ParsedItem[] {
     if (hm) {
       headingDepth = hm[1].length - 1;   // # → 0, ## → 1, ### → 2 …
       bulletIndents = [];                 // fresh indent context for this section
+      lastBulletDepth = -1;
+      afterBlankLine = false;
       result.push({ content: line.trim(), type: 'paragraph', depth: headingDepth });
       continue;
     }
@@ -756,14 +945,40 @@ export function parseMarkdownToItems(text: string): ParsedItem[] {
         bulletIndents.sort((a, b) => a - b);
       }
       const indentRank = bulletIndents.indexOf(indent);
-      result.push({ content: bm[2], type: 'bullet', depth: headingDepth + 1 + indentRank });
+      const depth = headingDepth + 1 + indentRank;
+      lastBulletDepth = depth;
+      lastBulletContentCol = indent + 2;  // "- " is 2 chars
+      afterBlankLine = false;
+      result.push({ content: bm[2], type: 'bullet', depth });
       continue;
     }
 
-    // Plain text — paragraph, sits one level below the current heading (or at 0 if none)
+    // Plain text — joins with the previous block (no blank line) or starts a
+    // new paragraph (after a blank line).  Only structural markers (- # --- |)
+    // can start new blocks; plain text never splits on newlines alone.
+    if (!afterBlankLine && result.length > 0) {
+      // Continuation: append to the previous block's content
+      result[result.length - 1].content += '\n' + line.trim();
+      continue;
+    }
+
+    // After a blank line: indented text stays in the bullet context
+    if (lastBulletDepth >= 0) {
+      const lineIndent = line.match(/^(\s*)/)?.[1].length ?? 0;
+      if (lineIndent >= lastBulletContentCol) {
+        result.push({ content: line.trim(), type: 'paragraph', depth: lastBulletDepth + 1 });
+        afterBlankLine = false;
+        continue;
+      }
+    }
+
+    // Standalone paragraph — breaks out of any bullet context
+    lastBulletDepth = -1;
+    afterBlankLine = false;
     result.push({ content: line.trim(), type: 'paragraph', depth: headingDepth + 1 });
   }
 
+  if (result.length === 0) return [];
   const minDepth = Math.min(...result.map(r => r.depth));
   return result.map(r => ({
     content: r.content,
@@ -878,6 +1093,12 @@ export function exportPage(pageId: string): string {
   // Collect table block IDs so we can skip their cell children in the flat list
   const tableCellIds = new Set<string>();
   const lines: string[] = [];
+  // Track previous block kind to insert blank lines at type transitions
+  let prevKind: 'bullet' | 'paragraph' | 'structural' | 'table' | null = null;
+  // Track the deepest valid bullet export depth in the current section.
+  // A bullet can only nest at maxBulletDepth + 1; orphans are clamped.
+  let maxBulletDepth = -1;
+
   for (let i = 0; i < flat.length; i++) {
     const b = flat[i];
 
@@ -885,17 +1106,18 @@ export function exportPage(pageId: string): string {
     if (tableCellIds.has(b.id)) continue;
 
     if (b.type === 'table') {
-      // Export table as Markdown table rows
+      if (prevKind && prevKind !== 'structural') lines.push('');
       const grid = getTableGrid(b.id);
       for (const cell of grid.flatMap(r => r.cells)) tableCellIds.add(cell.id);
       for (let r = 0; r < grid.length; r++) {
         const row = grid[r];
         lines.push('| ' + row.cells.map(c => c.content).join(' | ') + ' |');
         if (r === 0) {
-          // Separator after header row
           lines.push('| ' + row.cells.map(() => '---').join(' | ') + ' |');
         }
       }
+      prevKind = 'table';
+      maxBulletDepth = -1; // tables break bullet nesting context
       continue;
     }
 
@@ -903,14 +1125,51 @@ export function exportPage(pageId: string): string {
       if (lines.length > 0) lines.push('');
       headingDepth = b.depth + 1;
       lines.push(b.content);
+      // Blank line after heading/HR when followed by non-structural content
       const next = flat[i + 1];
-      if (next && !isStructural(next.content) && next.type !== 'table') lines.push('');
-    } else if (b.type === 'paragraph') {
+      if (next && !tableCellIds.has(next.id) && !isStructural(next.content)) {
+        lines.push('');
+      }
+      prevKind = 'structural';
+      maxBulletDepth = -1; // structural elements reset bullet nesting
+      continue;
+    }
+
+    if (b.type === 'paragraph') {
+      // Empty paragraph blocks export as blank line separators
+      if (b.content === '') {
+        if (prevKind) lines.push('');
+        prevKind = null; // reset — blank line already emitted
+        continue;
+      }
+      // Blank line before paragraph if it follows a bullet, table, or another paragraph
+      if (prevKind === 'bullet' || prevKind === 'paragraph' || prevKind === 'table') {
+        lines.push('');
+      }
       const indent = '  '.repeat(Math.max(0, b.depth - headingDepth));
-      lines.push(`${indent}${b.content}`);
+      for (const cl of b.content.split('\n')) {
+        lines.push(`${indent}${cl}`);
+      }
+      prevKind = 'paragraph';
+      maxBulletDepth = -1; // paragraphs break bullet nesting context
     } else {
-      const bulletDepth = b.depth - headingDepth;
-      lines.push(`${'  '.repeat(Math.max(0, bulletDepth))}- ${b.content}`);
+      // Bullet — blank line if previous was a paragraph
+      if (prevKind === 'paragraph' || prevKind === 'table') {
+        lines.push('');
+      }
+      // Clamp depth: a bullet can only nest one level deeper than the
+      // deepest bullet exported so far. Orphan children collapse upward.
+      // This ensures the exported markdown is valid CommonMark nesting.
+      const rawDepth = b.depth - headingDepth;
+      const bulletDepth = Math.min(rawDepth, maxBulletDepth + 1);
+      maxBulletDepth = bulletDepth;
+      const prefix = '  '.repeat(Math.max(0, bulletDepth));
+      const contentLines = b.content.split('\n');
+      lines.push(`${prefix}- ${contentLines[0]}`);
+      for (let j = 1; j < contentLines.length; j++) {
+        lines.push(`${prefix}  ${contentLines[j]}`);
+      }
+      prevKind = 'bullet';
     }
   }
   return lines.join('\n');
@@ -995,6 +1254,9 @@ export function importPage(pageId: string, markdown: string): void {
     orderAtDepth[depth]++;
     orderAtDepth.length = depth + 1;
   }
+
+  // Safety net: repair any orphan parent references that slipped through
+  validateTree(pageId);
 }
 
 // --- Content rendering ---

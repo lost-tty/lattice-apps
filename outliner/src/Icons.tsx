@@ -58,3 +58,21 @@ export const IconFile = () => (
     <polyline points="14 2 14 8 20 8" />
   </svg>
 );
+
+export const IconCode = () => (
+  <svg {...props}>
+    <polyline points="16 18 22 12 16 6" />
+    <polyline points="8 6 2 12 8 18" />
+  </svg>
+);
+
+export const IconTree = () => (
+  <svg {...props}>
+    <path d="M12 3v6" />
+    <path d="M6 12H4a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1z" />
+    <path d="M20 12h-2a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1z" />
+    <path d="M12 9a3 3 0 0 0-3 3" />
+    <path d="M12 9a3 3 0 0 1 3 3" />
+    <circle cx="12" cy="3" r="1" />
+  </svg>
+);

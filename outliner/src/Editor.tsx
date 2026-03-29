@@ -6,14 +6,16 @@
 // Blocks render as a FLAT list so indent/outdent/drag keeps
 // the contentEditable mounted and focused.
 
-import { useRef, useEffect, useState, useCallback } from 'preact/hooks';
+import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'preact/hooks';
 import type { FlatBlock } from './db';
 import type { Block } from './types';
-import { IconCopy, IconDownload } from './Icons';
+import { IconCopy, IconDownload, IconCode, IconTree } from './Icons';
+import type { BlockNode } from './types';
 import {
-  activeBlockId, currentPage,
+  activeBlockId, currentPage, blockData,
   saveBlock, deleteBlock, buildTree, flattenTree, hasChildren, toggleCollapse,
-  createBlockAfter, isParagraph, indentBlock, outdentBlock, removeBlock, joinBlockWithPrevious, moveBlock,
+  createBlockAfter, createChildBlock, isParagraph, indentBlock, outdentBlock, removeBlock, joinBlockWithPrevious, moveBlock, isDescendant,
+  blockKind, canAcceptChildren,
   createTable, insertTableRow, insertTableCol, reorderTableRow, reorderTableCol, deleteTableRow, deleteTableCol,
   parseMarkdownToItems, insertBlocksAfter, exportPage,
   renderContent, parseHeading, parseTodoStatus, cycleTodoStatus, toggleCheckbox, isTableRow, isTableSeparator, parseTableCells, getTableGrid,
@@ -34,136 +36,259 @@ function clearDropIndicators() {
 // Must match --indent in style.css
 const INDENT_PX = 24;
 
-// --- Cursor placement hint ---
+// --- Activation & cursor ---
+//
+// pendingActivation is the single source of truth for which block should
+// become active and where the cursor goes.  It is scoped to a specific
+// block ID so stale values from cancelled operations are harmless.
 
-let cursorPlacement: 'start' | 'end' | number = 'end';
+let pendingActivation: {
+  blockId: string;
+  cursor: 'start' | 'end' | number;
+} | null = null;
+
+/** Activate a block with a specific cursor position. */
+function activateBlock(blockId: string, cursor: 'start' | 'end' | number = 'end') {
+  pendingActivation = { blockId, cursor };
+  activeBlockId.value = blockId;
+}
+
+/** Get the cursor's character offset within a contentEditable element.
+ *  Handles both cases: focusNode is the text node (offset = char index)
+ *  or focusNode is the element (offset = child index → convert). */
+function getCursorOffset(el: HTMLElement): number {
+  const sel = window.getSelection();
+  if (!sel || !sel.focusNode) return 0;
+  if (sel.focusNode === el) {
+    // focusOffset is a child index — sum text lengths up to it
+    let offset = 0;
+    for (let i = 0; i < sel.focusOffset && i < el.childNodes.length; i++) {
+      offset += el.childNodes[i].textContent?.length ?? 0;
+    }
+    return offset;
+  }
+  return sel.focusOffset;
+}
+
+/** Place the caret inside a contentEditable element.
+ *  `position` is relative to the content (after prefix).
+ *  Always targets the text node (not the element) so that
+ *  sel.focusOffset is a character offset, not a child index. */
+function setCursor(el: HTMLElement, position: 'start' | 'end' | number, prefixLen: number) {
+  const textNode = el.firstChild;
+  if (!textNode || textNode.nodeType !== 3) return; // need a text node
+  const len = textNode.textContent?.length ?? 0;
+  const sel = window.getSelection()!;
+  const range = document.createRange();
+  let offset: number;
+  if (typeof position === 'number') {
+    offset = Math.min(position + prefixLen, len);
+  } else if (position === 'start') {
+    offset = prefixLen;
+  } else {
+    offset = len;
+  }
+  range.setStart(textNode, offset);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+// --- Shared helpers ---
+
+/** Compute visual depth: subtract heading ancestor levels so children
+ *  of headings render at the heading's visual level. */
+function getVisualDepth(node: FlatBlock): number {
+  let depth = node.depth;
+  let pid = node.parent;
+  while (pid) {
+    const p = blockData.value[pid];
+    if (p && p.type === 'paragraph' && parseHeading(p.content).level) depth--;
+    pid = p?.parent ?? null;
+  }
+  return depth;
+}
+
+/** Start a block-level drag operation. */
+function startBlockDrag(e: DragEvent, blockId: string) {
+  dragBlockId = blockId;
+  e.dataTransfer!.effectAllowed = 'move';
+  e.dataTransfer!.setData('text/plain', blockId);
+  requestAnimationFrame(() => {
+    (e.target as HTMLElement).closest('.block')?.classList.add('dragging');
+  });
+}
 
 // --- Block component ---
+
+/** Parse raw editor text into block type + content.
+ *  "- text" → bullet; everything else → paragraph.
+ *  Headings/todos are stored inside content, so no special handling here. */
+function parseRaw(raw: string): { type: 'bullet' | 'paragraph'; content: string } {
+  if (raw.startsWith('- ') || raw.startsWith('* ') || raw.startsWith('+ ')) {
+    return { type: 'bullet', content: raw.slice(2) };
+  }
+  return { type: 'paragraph', content: raw };
+}
+
+/** The prefix shown in the editor for a given block type. */
+function editPrefix(type: string | undefined): string {
+  return type === 'paragraph' ? '' : '- ';
+}
 
 function BlockItem({ node }: { node: FlatBlock }) {
   const isActive = activeBlockId.value === node.id;
   const ref = useRef<HTMLDivElement>(null);
   const hasKids = hasChildren(node.id);
+  const isHr = node.content === '---';
+  const prefix = editPrefix(node.type);
 
-  // Focus and set content when block becomes active
-  useEffect(() => {
+  // Enter edit mode: set raw markdown text, focus, and place cursor.
+  // useLayoutEffect runs synchronously after DOM commit (before paint).
+  useLayoutEffect(() => {
     if (!isActive || !ref.current) return;
     const el = ref.current;
-    el.textContent = node.content;
+    el.textContent = prefix + node.content;
     el.focus();
-    const sel = window.getSelection()!;
-    const range = document.createRange();
-    if (el.childNodes.length > 0) {
-      if (typeof cursorPlacement === 'number') {
-        range.setStart(el.firstChild!, cursorPlacement);
-        range.collapse(true);
-      } else {
-        range.selectNodeContents(el);
-        range.collapse(cursorPlacement === 'start');
-      }
-    }
-    sel.removeAllRanges();
-    sel.addRange(range);
-    cursorPlacement = 'end';
+    // Read cursor intent — ignore if it was meant for a different block
+    const cursor = (pendingActivation?.blockId === node.id)
+      ? pendingActivation.cursor
+      : 'end';
+    pendingActivation = null;
+    setCursor(el, cursor, prefix.length);
   }, [isActive]);
+
+  // View mode: render formatted HTML (Preact never owns children).
+  useLayoutEffect(() => {
+    if (isActive || !ref.current) return;
+    const { status, text: statusText } = parseTodoStatus(node.content);
+    const { text } = parseHeading(statusText);
+    const marker = status ? `<span class="todo-marker ${status}"></span>` : '';
+    ref.current.innerHTML = marker + `<span>${renderContent(text) || '<br>'}</span>`;
+  }, [isActive, node.content]);
+
+  /** Save current editor text to the data model, re-parsing type from prefix. */
+  function saveFromEditor() {
+    const raw = ref.current?.textContent || '';
+    const { type, content } = parseRaw(raw);
+    const current = blockData.value[node.id];
+    if (!current) return;
+    const currentType = current.type || 'bullet';
+    if (content !== current.content || type !== currentType) {
+      saveBlock({ ...current, content, type });
+    }
+  }
 
   function handleKeyDown(e: KeyboardEvent) {
     const el = ref.current!;
-    const content = el.textContent || '';
-
-    // Typing '- ' at the start of a paragraph promotes it to a bullet
-    if (e.key === ' ' && isParagraph(node.id)) {
-      const sel = window.getSelection()!;
-      if (sel.focusOffset === 1 && content === '-') {
-        e.preventDefault();
-        el.textContent = '';
-        saveBlock({ ...node, content: '', type: 'bullet' });
-        return;
-      }
-    }
+    const raw = el.textContent || '';
+    const { type: parsedType, content: parsedContent } = parseRaw(raw);
 
     if (e.key === 'Enter') {
       e.preventDefault();
 
       // If the block content is a table row, convert it to a table
-      const cells = parseTableCells(content);
+      const cells = parseTableCells(parsedContent);
       if (cells && cells.length > 0) {
         const tableId = createTable(node.id, [cells]);
         deleteBlock(node.id);
-        // Add an empty second row and focus its first cell
         const newCellIds = insertTableRow(tableId);
-        if (newCellIds.length > 0) activeBlockId.value = newCellIds[0];
+        if (newCellIds.length > 0) activateBlock(newCellIds[0], 'start');
         return;
       }
 
-      const sel = window.getSelection()!;
-      const offset = sel.focusOffset;
-      const before = content.slice(0, offset);
-      const after = content.slice(offset);
-      el.textContent = before;
-      saveBlock({ ...node, content: before });
-      const newId = createBlockAfter(node.id, after);
-      cursorPlacement = 'start';
-      activeBlockId.value = newId;
+      const offset = getCursorOffset(el);
+      const rawBefore = raw.slice(0, offset);
+      const rawAfter = raw.slice(offset);
+
+      if (rawBefore === '') {
+        // Cursor at position 0: insert empty block before, keep content in new block
+        saveBlock({ ...node, content: '', type: 'paragraph' });
+        const { type: afterType, content: afterContent } = parseRaw(raw);
+        const newId = createBlockAfter(node.id, afterContent, afterType);
+        activateBlock(newId, 'start');
+        return;
+      }
+
+      const { type: beforeType, content: beforeContent } = parseRaw(rawBefore);
+      el.textContent = rawBefore;
+      saveBlock({ ...node, content: beforeContent, type: beforeType });
+
+      // Headings act as parents — Enter creates a child block, not a sibling
+      const { level } = parseHeading(beforeContent);
+      if (level) {
+        const newId = createChildBlock(node.id, rawAfter);
+        activateBlock(newId, 'start');
+        return;
+      }
+
+      const newId = createBlockAfter(node.id, rawAfter, beforeType);
+      activateBlock(newId, 'start');
       return;
     }
 
     if (e.key === 'Backspace') {
-      const sel = window.getSelection()!;
-      if (sel.focusOffset === 0 && content !== '') {
-        // Cursor at the left of a non-empty block: join with the previous block.
+      // Cursor at the very start → join with previous block
+      if (getCursorOffset(el) === 0 && raw !== '') {
+        e.preventDefault();
+        saveFromEditor();
+        const joined = joinBlockWithPrevious(node.id);
+        if (joined) activateBlock(joined.prevId, joined.cursorPos);
+        return;
+      }
+
+      // Only the bullet prefix remains → demote to empty paragraph
+      if (raw === '- ' || raw === '* ' || raw === '+ ') {
+        e.preventDefault();
+        el.textContent = '';
+        const current = blockData.value[node.id];
+        if (current) saveBlock({ ...current, content: '', type: 'paragraph' });
+        return;
+      }
+
+      // Completely empty → try to join or delete
+      if (raw === '') {
         e.preventDefault();
         const joined = joinBlockWithPrevious(node.id);
         if (joined) {
-          cursorPlacement = joined.cursorPos;
-          activeBlockId.value = joined.prevId;
+          activateBlock(joined.prevId, joined.cursorPos);
+        } else {
+          removeBlock(node.id);
         }
         return;
       }
-      if (content === '') {
-        e.preventDefault();
-        // Empty bullet → demote to paragraph first; empty paragraph → delete
-        if (!isParagraph(node.id)) {
-          saveBlock({ ...node, type: 'paragraph' });
-          return;
-        }
-        const prevId = removeBlock(node.id);
-        if (prevId) activeBlockId.value = prevId;
-        return;
-      }
+      return;
     }
 
     if (e.key === 'Tab') {
       e.preventDefault();
-      saveBlock({ ...node, content });
+      saveFromEditor();
       if (e.shiftKey) outdentBlock(node.id);
       else indentBlock(node.id);
       return;
     }
 
     if (e.key === 'ArrowUp') {
-      const sel = window.getSelection()!;
-      if (sel.focusOffset === 0) {
+      if (getCursorOffset(el) === 0) {
         const flat = flattenTree(buildTree(node.pageId));
         const idx = flat.findIndex(b => b.id === node.id);
         if (idx > 0) {
           e.preventDefault();
-          saveBlock({ ...node, content });
-          activeBlockId.value = flat[idx - 1].id;
+          saveFromEditor();
+          activateBlock(flat[idx - 1].id, 'end');
         }
       }
       return;
     }
 
     if (e.key === 'ArrowDown') {
-      const sel = window.getSelection()!;
-      if (sel.focusOffset === content.length) {
+      if (getCursorOffset(el) === raw.length) {
         const flat = flattenTree(buildTree(node.pageId));
         const idx = flat.findIndex(b => b.id === node.id);
         if (idx < flat.length - 1) {
           e.preventDefault();
-          saveBlock({ ...node, content });
-          activeBlockId.value = flat[idx + 1].id;
+          saveFromEditor();
+          activateBlock(flat[idx + 1].id, 'start');
         }
       }
       return;
@@ -172,9 +297,13 @@ function BlockItem({ node }: { node: FlatBlock }) {
 
   function handleBlur() {
     if (!ref.current) return;
-    const content = ref.current.textContent || '';
-    if (content !== node.content) saveBlock({ ...node, content });
-    if (activeBlockId.value === node.id) activeBlockId.value = null;
+    // Only save from editor if this block is still active.
+    // If Enter/Tab/Arrow already saved and changed activeBlockId, skip —
+    // the view useEffect may have overwritten the DOM content by now.
+    if (activeBlockId.value === node.id) {
+      saveFromEditor();
+      activeBlockId.value = null;
+    }
   }
 
   function handlePaste(e: ClipboardEvent) {
@@ -185,10 +314,10 @@ function BlockItem({ node }: { node: FlatBlock }) {
     e.preventDefault();
 
     const el = ref.current!;
-    const offset = window.getSelection()?.focusOffset ?? (el.textContent?.length ?? 0);
-    const current = el.textContent ?? '';
-    const before = current.slice(0, offset);
-    const after = current.slice(offset);
+    const offset = getCursorOffset(el);
+    const raw = el.textContent ?? '';
+    const { content: beforeContent } = parseRaw(raw.slice(0, offset));
+    const rawAfter = raw.slice(offset);
 
     const items = parseMarkdownToItems(text);
     if (items.length === 0) return;
@@ -197,7 +326,7 @@ function BlockItem({ node }: { node: FlatBlock }) {
     const merged = items.map((item, i) => ({
       ...item,
       content:
-        (i === 0 ? before : '') + item.content + (i === items.length - 1 ? after : ''),
+        (i === 0 ? beforeContent : '') + item.content + (i === items.length - 1 ? rawAfter : ''),
     }));
 
     // The current block takes the first item's content.
@@ -205,19 +334,18 @@ function BlockItem({ node }: { node: FlatBlock }) {
 
     if (merged.length === 1) {
       // Everything fit in one block — place cursor after the pasted text.
-      cursorPlacement = before.length + items[0].content.length;
-      activeBlockId.value = node.id;
+      activateBlock(node.id, beforeContent.length + items[0].content.length);
       return;
     }
 
     // Remaining items become new blocks; cursor lands before the "after" text.
     const lastId = insertBlocksAfter(node.id, merged.slice(1));
     const lastContent = merged[merged.length - 1].content;
-    cursorPlacement = lastContent.length - after.length;
-    activeBlockId.value = lastId;
+    activateBlock(lastId, lastContent.length - rawAfter.length);
   }
 
   function handleClick(e: MouseEvent) {
+    if (isActive) return; // let browser handle cursor placement in contentEditable
     const target = e.target as HTMLElement;
     if (target.classList.contains('wiki-link') || target.classList.contains('tag')) {
       e.stopPropagation();
@@ -231,32 +359,48 @@ function BlockItem({ node }: { node: FlatBlock }) {
     }
     if (target.classList.contains('md-checkbox')) {
       e.stopPropagation();
-      saveBlock({ ...node, content: toggleCheckbox(node.content) });
+      const current = blockData.value[node.id];
+      if (current) saveBlock({ ...current, content: toggleCheckbox(current.content) });
       return;
     }
-    activeBlockId.value = node.id;
-  }
-
-  function handleTodoClick(e: MouseEvent) {
-    e.stopPropagation();
-    saveBlock({ ...node, content: cycleTodoStatus(node.content) });
+    if (target.classList.contains('todo-marker')) {
+      e.stopPropagation();
+      const current = blockData.value[node.id];
+      if (current) saveBlock({ ...current, content: cycleTodoStatus(current.content) });
+      return;
+    }
+    // Defer activation to the next frame so the browser's click/mouseup caret
+    // placement is fully resolved before we set content and place the cursor.
+    // This eliminates the race where the browser overrides our caret position.
+    const id = node.id;
+    requestAnimationFrame(() => {
+      activateBlock(id, 'end');
+    });
   }
 
   // --- Drag handlers ---
 
   function handleDragStart(e: DragEvent) {
-    dragBlockId = node.id;
-    e.dataTransfer!.effectAllowed = 'move';
-    e.dataTransfer!.setData('text/plain', node.id);
-    // Add dragging class after a tick so the drag image captures the normal state
-    requestAnimationFrame(() => {
-      (e.target as HTMLElement).closest('.block')?.classList.add('dragging');
-    });
+    startBlockDrag(e, node.id);
   }
 
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
     if (!dragBlockId || dragBlockId === node.id) return;
+    if (isDescendant(node.id, dragBlockId)) return; // can't drop onto own descendant
+
+    const dragBlock = blockData.value[dragBlockId];
+    if (!dragBlock) return;
+
+    const dragKind = blockKind(dragBlock);
+    const targetKind = blockKind(node);
+
+    // Can the dragged block be a sibling at this level?
+    // If target is a heading, only headings may be siblings.
+    const canSibling = targetKind !== 'heading' || dragKind === 'heading';
+
+    // Can the dragged block nest under this target?
+    const canNest = canAcceptChildren(node);
 
     const el = (e.currentTarget as HTMLElement);
     const rect = el.getBoundingClientRect();
@@ -265,14 +409,17 @@ function BlockItem({ node }: { node: FlatBlock }) {
 
     clearDropIndicators();
 
-    if (y < rect.height * 0.25) {
-      // Top quarter → insert before (sibling above)
+    if (y < rect.height * 0.25 && canSibling) {
       el.classList.add('drop-before');
     } else {
-      // Bottom three-quarters: x-position decides sibling vs child.
-      // Past the bullet + gap (one full --indent step) → nest as child; otherwise sibling.
       const nestThreshold = (node.depth + 1) * INDENT_PX;
-      el.classList.add(xOffset >= nestThreshold ? 'drop-nested' : 'drop-after');
+      const wantsNest = xOffset >= nestThreshold;
+      if (wantsNest && canNest) {
+        el.classList.add('drop-nested');
+      } else if (canSibling) {
+        el.classList.add('drop-after');
+      }
+      // If neither is allowed, no indicator shown
     }
   }
 
@@ -304,60 +451,50 @@ function BlockItem({ node }: { node: FlatBlock }) {
     dragBlockId = null;
   }
 
-  // --- Bullet ---
+  // --- Render ---
 
   const isPara = node.type === 'paragraph';
-  const bulletClass = `bullet${hasKids ? ' has-children' : ''}${node.collapsed ? ' collapsed' : ''}${isPara ? ' paragraph' : ''}`;
+  const { status } = parseTodoStatus(node.content);
+  const { level } = parseHeading(node.content);
+  const contentClass = [
+    'block-content',
+    isActive ? 'editing' : '',
+    !isActive && status === 'done' ? 'is-done' : '',
+    !isActive && status === 'cancelled' ? 'is-cancelled' : '',
+    level ? `heading-${level}` : '',
+  ].filter(Boolean).join(' ');
 
-  const isHr = node.content === '---';
+  const visualDepth = getVisualDepth(node);
 
   return (
     <div
       class="block"
-      // HR blocks render at full width regardless of tree depth
-      style={isHr && !isActive ? '--depth: 0' : `--depth: ${node.depth}`}
+      style={isHr && !isActive ? '--depth: 0' : `--depth: ${visualDepth}`}
       onDragOver={(e: Event) => handleDragOver(e as DragEvent)}
       onDragLeave={(e: Event) => handleDragLeave(e as DragEvent)}
       onDrop={(e: Event) => handleDrop(e as DragEvent)}
       onDragEnd={handleDragEnd}
     >
       <span
-        class={bulletClass}
+        class={`gutter${hasKids ? ' has-children' : ''}${node.collapsed ? ' collapsed' : ''}`}
         draggable
         onClick={(e: Event) => { if (hasKids) { e.stopPropagation(); toggleCollapse(node.id); } }}
         onDragStart={(e: Event) => handleDragStart(e as DragEvent)}
       />
-      {isActive ? (
-        // key="edit" forces Preact to unmount/remount when toggling active state.
-        // Without it Preact patches the same DOM node in place, leaving the raw
-        // text node (set via el.textContent in useEffect) alongside the new
-        // <span> child — causing the text to appear twice.
+      {!isPara && <span class="bullet" />}
+      {isHr && !isActive ? (
+        <hr onClick={handleClick} />
+      ) : (
         <div
-          key="edit"
           ref={ref}
-          class="block-content editing"
-          contentEditable
+          class={contentClass}
+          contentEditable={isActive}
           onKeyDown={handleKeyDown}
           onBlur={handleBlur}
+          onClick={handleClick}
           onPaste={(e: Event) => handlePaste(e as ClipboardEvent)}
         />
-      ) : isHr ? (
-        <hr onClick={handleClick} />
-      ) : (() => {
-        const { status, text: statusText } = parseTodoStatus(node.content);
-        const { level, text } = parseHeading(statusText);
-        const cls = [
-          'block-content',
-          status === 'done' ? 'is-done' : status === 'cancelled' ? 'is-cancelled' : '',
-          level ? `heading-${level}` : '',
-        ].filter(Boolean).join(' ');
-        return (
-          <div key="view" class={cls} onClick={handleClick}>
-            {status && <span class={`todo-marker ${status}`} onClick={handleTodoClick} />}
-            <span dangerouslySetInnerHTML={{ __html: renderContent(text) || '<br>' }} />
-          </div>
-        );
-      })()}
+      )}
     </div>
   );
 }
@@ -511,12 +648,32 @@ function TableBlock({ node }: { node: FlatBlock }) {
     dragColState = null;
   }
 
-  function onDragEnd() { dragRowState = null; dragColState = null; }
+  function onDragEnd() {
+    dragRowState = null;
+    dragColState = null;
+    dragBlockId = null;
+    document.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
+  }
 
   const colCount = colOrders.length;
 
   return (
-    <div class="block table-block" style={`--depth: ${node.depth}`} onDragEnd={onDragEnd}>
+    <div class="block table-block" style={`--depth: ${getVisualDepth(node)}`} onDragEnd={onDragEnd}>
+      <span
+        class="gutter table-gutter"
+        draggable
+        tabIndex={0}
+        onClick={() => { activeBlockId.value = node.id; }}
+        onKeyDown={(e: Event) => {
+          const ke = e as KeyboardEvent;
+          if (ke.key === 'Backspace' || ke.key === 'Delete') {
+            ke.preventDefault();
+            void deleteBlock(node.id);
+            activeBlockId.value = null;
+          }
+        }}
+        onDragStart={(e: Event) => startBlockDrag(e as DragEvent, node.id)}
+      />
       <div class="table-grid" style={`grid-template-columns: repeat(${colCount}, 1fr)`}>
         {grid.map((row, ri) =>
           row.cells.map((cell, ci) => {
@@ -553,7 +710,7 @@ function TableBlock({ node }: { node: FlatBlock }) {
                     draggable
                     onDragStart={() => onColDragStart(colOrder)}
                     onContextMenu={(e: Event) => onColContext(e as MouseEvent, colOrder)}
-                  >⠿</span>
+                  >⋯</span>
                 )}
                 {activeBlockId.value === cell.id ? (
                   <CellEditor cell={cell} />
@@ -679,8 +836,8 @@ function renderBlockList(flat: FlatBlock[]) {
 
 // --- Editor ---
 
-// How many journal days to load per batch
-const JOURNAL_BATCH = 5;
+// How many journal days to load per batch (large enough to fill most viewports)
+const JOURNAL_BATCH = 15;
 
 export function Editor() {
   const pageId = currentPage.value;
@@ -693,16 +850,23 @@ export function Editor() {
   }
 
   if (isJournalPage(pageId)) {
-    return <JournalView startPageId={pageId} />;
+    return <JournalView key={pageId} startPageId={pageId} />;
   }
 
   return <SinglePageView pageId={pageId} />;
 }
 
-function SinglePageView({ pageId }: { pageId: string }) {
+// --- Page section (shared between single page and journal views) ---
+
+function PageSection({ pageId, titleClickable }: { pageId: string; titleClickable?: boolean }) {
   const tree = buildTree(pageId);
   const flat = flattenTree(tree);
   const backlinks = getBacklinks(pageId);
+  const [debugPanel, setDebugPanel] = useState<'off' | 'markdown' | 'ast'>('off');
+
+  function togglePanel(panel: 'markdown' | 'ast') {
+    setDebugPanel(prev => prev === panel ? 'off' : panel);
+  }
 
   function handleCopyMarkdown() {
     const md = exportPage(pageId);
@@ -722,80 +886,149 @@ function SinglePageView({ pageId }: { pageId: string }) {
   }
 
   return (
-    <div class="editor">
-      <div class="page-toolbar">
-        <button class="toolbar-btn" onClick={handleCopyMarkdown} title="Copy as Markdown"><IconCopy /></button>
-        <button class="toolbar-btn" onClick={handleDownloadMarkdown} title="Download page as Markdown"><IconDownload /></button>
+    <div class={`page-section ${debugPanel !== 'off' ? 'with-debug' : ''}`}>
+      <div class="page-section-main">
+        <div class="page-toolbar">
+          <button class={`toolbar-btn${debugPanel === 'markdown' ? ' active' : ''}`} onClick={() => togglePanel('markdown')} title="Debug Markdown"><IconCode /></button>
+          <button class={`toolbar-btn${debugPanel === 'ast' ? ' active' : ''}`} onClick={() => togglePanel('ast')} title="Debug AST"><IconTree /></button>
+          <div class="toolbar-sep" />
+          <button class="toolbar-btn" onClick={handleCopyMarkdown} title="Copy as Markdown"><IconCopy /></button>
+          <button class="toolbar-btn" onClick={handleDownloadMarkdown} title="Download page as Markdown"><IconDownload /></button>
+        </div>
+        <h1
+          class={`page-title${titleClickable ? ' journal-day-title' : ''}`}
+          onClick={titleClickable ? () => navigateById(pageId) : undefined}
+        >
+          {pageTitle(pageId)}
+        </h1>
+        <div class="block-tree">
+          {renderBlockList(flat)}
+          <div
+            class="block-tree-tail"
+            onClick={() => {
+              // Walk backwards to find the last top-level block (depth 0)
+              for (let i = flat.length - 1; i >= 0; i--) {
+                if (flat[i].depth === 0) {
+                  const newId = createBlockAfter(flat[i].id, '', 'paragraph');
+                  activateBlock(newId, 'start');
+                  return;
+                }
+              }
+            }}
+          />
+        </div>
+        {backlinks.length > 0 && <BacklinksPanel backlinks={backlinks} />}
       </div>
-      <h1 class="page-title">{pageTitle(pageId)}</h1>
-      <div class="block-tree">
-        {renderBlockList(flat)}
-      </div>
-      {backlinks.length > 0 && <BacklinksPanel backlinks={backlinks} />}
+      {debugPanel === 'markdown' && <DebugPanel header="Markdown"><pre class="markdown-panel-content">{exportPage(pageId)}</pre></DebugPanel>}
+      {debugPanel === 'ast' && <DebugPanel header="AST"><ASTContent tree={tree} /></DebugPanel>}
     </div>
   );
 }
+
+function SinglePageView({ pageId }: { pageId: string }) {
+  return (
+    <div class="editor">
+      <div class="editor-main">
+        <PageSection pageId={pageId} />
+      </div>
+    </div>
+  );
+}
+
+function DebugPanel({ header, children }: { header: string; children: any }) {
+  return (
+    <div class="debug-panel">
+      <div class="debug-panel-header">{header}</div>
+      {children}
+    </div>
+  );
+}
+
+function ASTContent({ tree }: { tree: BlockNode[] }) {
+  function renderNode(node: BlockNode, prefix: string, isLast: boolean): any {
+    const connector = isLast ? '└─ ' : '├─ ';
+    const childPrefix = prefix + (isLast ? '   ' : '│  ');
+    const type = node.type === 'table' ? 'table' : node.type === 'paragraph' ? 'para' : 'bullet';
+    const snippet = node.content.length > 30 ? node.content.slice(0, 30) + '…' : node.content;
+    const meta = [
+      node.collapsed ? 'collapsed' : '',
+    ].filter(Boolean).join(', ');
+
+    return (
+      <>
+        <span class="ast-line">
+          <span class="ast-prefix">{prefix}{connector}</span>
+          <span class={`ast-type ast-type-${type}`}>{type}</span>
+          {snippet && <span class="ast-content"> "{snippet}"</span>}
+          {meta && <span class="ast-meta"> [{meta}]</span>}
+        </span>{'\n'}
+        {node.children.map((child, i) =>
+          renderNode(child, childPrefix, i === node.children.length - 1)
+        )}
+      </>
+    );
+  }
+
+  return (
+    <pre class="markdown-panel-content ast-tree">
+      <span class="ast-line"><span class="ast-type ast-type-page">page</span></span>{'\n'}
+      {tree.map((node, i) => renderNode(node, '', i === tree.length - 1))}
+    </pre>
+  );
+}
+
+// --- Journal view with bidirectional scrolling ---
+//
+// Journals are sorted newest-first. The view loads a window around the
+// start date and lazily expands in both directions via scroll events.
+// key={startPageId} on the parent forces a fresh mount when navigating.
 
 function JournalView({ startPageId }: { startPageId: string }) {
   const allJournals = getJournalPages();
+  const startIdx = Math.max(allJournals.findIndex(p => p.id === startPageId), 0);
 
-  // Find the index of the current journal in the sorted list
-  const startIdx = allJournals.findIndex(p => p.id === startPageId);
-  const [visibleCount, setVisibleCount] = useState(JOURNAL_BATCH);
-  const sentinelRef = useRef<HTMLDivElement>(null);
+  const [newerCount, setNewerCount] = useState(startIdx > 0 ? JOURNAL_BATCH : 0);
+  const [olderCount, setOlderCount] = useState(JOURNAL_BATCH);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const prevNewerCount = useRef(0);
 
-  // Reset visible count when the start page changes
-  useEffect(() => {
-    setVisibleCount(JOURNAL_BATCH);
-  }, [startPageId]);
+  const newerStart = Math.max(startIdx - newerCount, 0);
+  const olderEnd = Math.min(startIdx + olderCount, allJournals.length);
+  const visibleJournals = allJournals.slice(newerStart, olderEnd);
 
-  // Slice from the current journal onwards (older)
-  const visibleJournals = allJournals.slice(
-    Math.max(startIdx, 0),
-    Math.max(startIdx, 0) + visibleCount,
-  );
-  const hasMore = Math.max(startIdx, 0) + visibleCount < allJournals.length;
+  const hasNewer = newerStart > 0;
+  const hasOlder = olderEnd < allJournals.length;
 
-  // IntersectionObserver to load more when sentinel enters viewport
-  const loadMore = useCallback(() => {
-    if (hasMore) setVisibleCount(c => c + JOURNAL_BATCH);
-  }, [hasMore]);
+  // After newer entries prepend, restore scroll so the anchor doesn't jump.
+  useLayoutEffect(() => {
+    if (newerCount > prevNewerCount.current && anchorRef.current && scrollRef.current) {
+      anchorRef.current.scrollIntoView({ block: 'start' });
+    }
+    prevNewerCount.current = newerCount;
+  }, [newerCount]);
 
-  useEffect(() => {
-    const el = sentinelRef.current;
+  // Load more on scroll (both directions).
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current;
     if (!el) return;
-    const observer = new IntersectionObserver(
-      (entries) => { if (entries[0].isIntersecting) loadMore(); },
-      { rootMargin: '200px' },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [loadMore, visibleCount]);
+    if (hasOlder && el.scrollTop + el.clientHeight >= el.scrollHeight - 400) {
+      setOlderCount(c => c + JOURNAL_BATCH);
+    }
+    if (hasNewer && el.scrollTop < 400) {
+      setNewerCount(c => c + JOURNAL_BATCH);
+    }
+  }, [hasNewer, hasOlder]);
 
   return (
-    <div class="editor journal-view">
-      {visibleJournals.map(page => (
-        <JournalDay key={page.id} pageId={page.id} />
-      ))}
-      {hasMore && <div ref={sentinelRef} class="journal-sentinel">Loading...</div>}
-    </div>
-  );
-}
-
-function JournalDay({ pageId }: { pageId: string }) {
-  const tree = buildTree(pageId);
-  const flat = flattenTree(tree);
-  const backlinks = getBacklinks(pageId);
-
-  return (
-    <div class="journal-day">
-      <h1 class="page-title journal-day-title" onClick={() => navigateById(pageId)}>
-        {pageTitle(pageId)}
-      </h1>
-      <div class="block-tree">
-        {renderBlockList(flat)}
+    <div class="editor" ref={scrollRef} onScroll={onScroll}>
+      <div class="editor-main journal-view">
+        {visibleJournals.map(page => (
+          <div key={page.id} ref={page.id === startPageId ? anchorRef : undefined}>
+            <PageSection pageId={page.id} titleClickable />
+          </div>
+        ))}
       </div>
-      {backlinks.length > 0 && <BacklinksPanel backlinks={backlinks} />}
     </div>
   );
 }

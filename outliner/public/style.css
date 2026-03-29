@@ -12,10 +12,34 @@
   --delete: oklch(0.75 0 0);
   --delete-hover: oklch(0.6 0.2 25);
   --drop-indicator: oklch(0.6 0.15 250);
+  --highlight: oklch(0.9 0.1 90);
+  --wait-border: oklch(0.65 0.15 60);
+  --wait-bg: oklch(0.92 0.06 60);
 
   /* Layout rhythm */
   --bullet-size: 20px;
-  --indent: 24px;   /* per depth level; also equals --bullet-size + block gap */
+  --indent: 24px;   /* per depth level */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: oklch(0.18 0.01 260);
+    --sidebar-bg: oklch(0.22 0.01 260);
+    --border: oklch(0.28 0.01 260);
+    --text: oklch(0.92 0.005 260);
+    --text-muted: oklch(0.72 0.005 260);
+    --text-faint: oklch(0.6 0.005 260);
+    --bullet: oklch(0.55 0.01 260);
+    --active-bg: oklch(0.25 0.015 250);
+    --link: oklch(0.7 0.18 250);
+    --link-bg: oklch(0.28 0.03 250);
+    --delete: oklch(0.65 0.02 25);
+    --delete-hover: oklch(0.75 0.05 25);
+    --drop-indicator: oklch(0.7 0.15 250);
+    --highlight: oklch(0.35 0.1 90);
+    --wait-border: oklch(0.55 0.12 60);
+    --wait-bg: oklch(0.3 0.06 60);
+  }
 }
 
 * {
@@ -255,7 +279,7 @@ body {
 .table-grid {
   display: grid;
   font-size: inherit;
-  margin: 1.5rem 0 4px 1.5rem;
+  margin: 1.5rem 0 4px 0;
 }
 
 .table-cell {
@@ -273,39 +297,39 @@ body {
   background: var(--sidebar-bg);
 }
 
-/* Row handle — positioned left of the first cell in each row via negative margin */
+/* Row handle — positioned left of the first cell in each row */
 .row-handle {
   position: absolute;
-  left: -1.25rem;
+  left: calc(-1 * var(--bullet-size) - 4px);
   top: 0;
   bottom: 0;
-  width: 1rem;
+  width: var(--bullet-size);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: grab;
-  font-size: 10px;
+  font-size: 14px;
   user-select: none;
   color: transparent;
-  border-radius: 3px;
+  border-radius: 4px;
   transition: color 0.1s;
 }
 
-/* Col handle — positioned above header cells via negative margin */
+/* Col handle — positioned above header cells */
 .col-handle {
   position: absolute;
-  top: -1.25rem;
+  top: calc(-1 * var(--bullet-size) - 4px);
   left: 0;
   right: 0;
-  height: 1rem;
+  height: var(--bullet-size);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: grab;
-  font-size: 10px;
+  font-size: 14px;
   user-select: none;
   color: transparent;
-  border-radius: 3px;
+  border-radius: 4px;
   transition: color 0.1s;
 }
 
@@ -451,9 +475,110 @@ body {
 
 .editor {
   flex: 1;
-  padding: 48px 64px;
   overflow-y: auto;
+  overflow-anchor: auto;
+}
 
+.editor-main {
+  padding: 48px 64px;
+}
+
+.block-tree-tail {
+  min-height: 50vh;
+  cursor: text;
+}
+
+/* --- Page section (reusable per-page unit) --- */
+
+.page-section {
+  margin-bottom: 32px;
+}
+
+.page-section.with-debug {
+  display: flex;
+  gap: 0;
+}
+
+.page-section.with-debug .page-section-main {
+  flex: 1;
+  min-width: 0;
+}
+
+/* --- Debug panel (inline within each page section) --- */
+
+.debug-panel {
+  width: 380px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--sidebar-bg);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  max-height: 80vh;
+}
+
+.debug-panel-header {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.markdown-panel-content {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text);
+  padding: 16px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  flex: 1;
+}
+
+.toolbar-btn.active {
+  color: var(--link);
+  background: var(--link-bg);
+}
+
+/* --- AST debug panel --- */
+
+.ast-tree {
+  font-size: 11px;
+  line-height: 1.41;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.ast-line {
+  display: inline;
+}
+
+.ast-prefix {
+  color: var(--text-faint);
+}
+
+.ast-type {
+  font-weight: 600;
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+.ast-type-page   { color: var(--link); }
+.ast-type-bullet { color: oklch(0.6 0.15 150); }
+.ast-type-para   { color: oklch(0.6 0.12 280); }
+.ast-type-table  { color: oklch(0.6 0.12 40); }
+
+.ast-content {
+  color: var(--text-muted);
+}
+
+.ast-meta {
+  color: var(--text-faint);
+  font-style: italic;
 }
 
 .editor.empty {
@@ -467,6 +592,7 @@ body {
   font-size: 30px;
   font-weight: 700;
   line-height: 1.3;
+  padding-left: 6px;
 }
 
 .page-toolbar {
@@ -551,7 +677,7 @@ body {
   content: '';
   position: absolute;
   bottom: 0;
-  left: calc(var(--indent) + var(--bullet-size));
+  left: var(--indent);
   right: 0;
   height: 2px;
   background: var(--drop-indicator);
@@ -559,24 +685,92 @@ body {
   z-index: 1;
 }
 
-/* --- Bullet / collapse toggle --- */
+/* --- Gutter (drag handle + collapse toggle, positioned in the indent gutter) --- */
 
-.bullet {
+.gutter {
+  position: absolute;
+  left: calc(var(--depth, 0) * var(--indent) - var(--bullet-size));
   width: var(--bullet-size);
   height: var(--bullet-size);
   display: flex;
   align-items: center;
   justify-content: center;
+  cursor: grab;
+  border-radius: 4px;
+  opacity: 0;
+}
+
+.block:hover > .gutter,
+.gutter.has-children {
+  opacity: 1;
+}
+
+.gutter:hover {
+  background: var(--border);
+}
+
+/* Default: grip icon for drag */
+.gutter::after {
+  content: '⠿';
+  color: var(--bullet);
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* Has children: show chevron instead */
+.gutter.has-children::after {
+  content: '';
+  width: 0;
+  height: 0;
+  border-left: 5px solid var(--bullet);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.15s;
+  transform: rotate(90deg);
+}
+
+.gutter.has-children {
+  cursor: pointer;
+}
+
+.gutter.collapsed::after {
+  transform: rotate(0deg);
+}
+
+/* Table gutter: top-left corner to avoid collision with row handles */
+.gutter.table-gutter {
+  top: 0;
+}
+
+.gutter.table-gutter:focus {
+  opacity: 1;
+  outline: none;
+}
+
+.table-block:focus-within > .table-grid {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* --- Bullet (drag handle + visual dot) --- */
+
+.bullet {
+  width: var(--bullet-size);
+  height: var(--bullet-size);
   flex-shrink: 0;
   cursor: grab;
   border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .bullet:hover {
   background: var(--border);
 }
 
-/* Default: small dot */
+/* Default: small dot centred in the bullet area */
 .bullet::after {
   content: '';
   width: 6px;
@@ -585,40 +779,6 @@ body {
   border-radius: 50%;
 }
 
-/* Paragraph blocks: no dot, but still draggable */
-.bullet.paragraph::after {
-  background: transparent;
-}
-
-.bullet.paragraph:hover::after {
-  background: var(--border);
-}
-
-/* Has children: show caret instead of dot */
-.bullet.has-children {
-  cursor: pointer;
-}
-
-.bullet.has-children::after {
-  width: 0;
-  height: 0;
-  background: none;
-  border-radius: 0;
-  border-left: 5px solid var(--bullet);
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
-  transition: transform 0.15s;
-  transform: rotate(90deg);
-}
-
-.bullet.has-children.collapsed::after {
-  transform: rotate(0deg);
-}
-
-/* Filled dot when collapsed (like Logseq) */
-.bullet.has-children.collapsed {
-  background: var(--border);
-}
 
 .block-content {
   flex: 1;
@@ -634,6 +794,11 @@ body {
 
 .block-content.editing {
   background: var(--active-bg);
+}
+
+/* Hide the bullet dot when editing (the raw "- " prefix in the text replaces it) */
+.block:has(.block-content.editing) > .bullet::after {
+  visibility: hidden;
 }
 
 /* Horizontal rule block */
@@ -664,7 +829,7 @@ code {
 }
 
 mark {
-  background: oklch(0.9 0.1 90);
+  background: var(--highlight);
   padding: 0 2px;
   border-radius: 2px;
 }
@@ -729,8 +894,8 @@ s {
 }
 
 .todo-marker.wait {
-  border-color: oklch(0.65 0.15 60);
-  background: oklch(0.92 0.06 60);
+  border-color: var(--wait-border);
+  background: var(--wait-bg);
 }
 
 .todo-marker.done {
@@ -857,17 +1022,12 @@ s {
 }
 
 /* Journal infinite scroll view */
-.journal-view {
-  padding-top: 24px;
-}
-
-.journal-day {
-  margin-bottom: 3rem;
+.journal-view .page-section {
   padding-bottom: 2rem;
   border-bottom: 1px solid var(--border);
 }
 
-.journal-day:last-child {
+.journal-view .page-section:last-child {
   border-bottom: none;
 }
 
@@ -880,9 +1040,4 @@ s {
   opacity: 1;
 }
 
-.journal-sentinel {
-  padding: 2rem;
-  text-align: center;
-  color: var(--text-faint);
-  font-size: 13px;
-}
+

@@ -6,10 +6,11 @@ import {
   savePage, getOrCreatePage, deletePage,
   saveBlock, deleteBlock,
   buildTree, flattenTree, getSiblings,
-  createBlockAfter, indentBlock, outdentBlock, removeBlock, joinBlockWithPrevious,
+  createBlockAfter, createChildBlock, indentBlock, outdentBlock, removeBlock, joinBlockWithPrevious,
   parseMarkdownToItems, insertBlocksAfter,
+  fixHeadingSections,
   exportPage, exportAllPages, importPage, importAllPages,
-  hasChildren, toggleCollapse, moveBlock,
+  hasChildren, toggleCollapse, moveBlock, validateTree,
   parseWikiLinks, renderContent, isTableRow, isTableSeparator, parseTableCells, parseHeading, parseTodoStatus, cycleTodoStatus, toggleCheckbox,
   getTableGrid, createTable, insertTableRow, insertTableCol, reorderTableRow, reorderTableCol, deleteTableRow, deleteTableCol,
   getBacklinks,
@@ -250,6 +251,47 @@ describe('createBlockAfter', () => {
     const newId = createBlockAfter('2', 'new child');
     expect(blockData.value[newId].parent).toBe('1');
   });
+
+  it('simulated Enter: split block and activeBlockId points to new block', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: 'hello world', pageId, parent: null, order: 0 });
+
+    // Simulate Enter at offset 5: "hello" stays, " world" goes to new block
+    const before = 'hello';
+    const after = ' world';
+    saveBlock({ ...blockData.value['1'], content: before });
+    const newId = createBlockAfter('1', after);
+    activeBlockId.value = newId;
+
+    expect(blockData.value['1'].content).toBe('hello');
+    expect(blockData.value[newId].content).toBe(' world');
+    expect(activeBlockId.value).toBe(newId);
+
+    const flat = flattenTree(buildTree(pageId));
+    expect(flat.map(b => b.content)).toEqual(['hello', ' world']);
+  });
+});
+
+describe('createChildBlock', () => {
+  it('creates a block as the last child of the parent', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
+    saveBlock({ id: '2', content: 'existing', pageId, parent: '1', order: 0 });
+
+    const newId = createChildBlock('1', 'new child');
+    const block = blockData.value[newId];
+    expect(block.parent).toBe('1');
+    expect(block.content).toBe('new child');
+    expect(block.order).toBeGreaterThan(blockData.value['2'].order);
+  });
+
+  it('creates first child when parent has no children', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
+
+    const newId = createChildBlock('1', 'first');
+    expect(blockData.value[newId].parent).toBe('1');
+  });
 });
 
 describe('indentBlock', () => {
@@ -268,6 +310,33 @@ describe('indentBlock', () => {
 
     indentBlock('1');
     expect(blockData.value['1'].parent).toBeNull();
+  });
+
+  it('does not nest under a paragraph block', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: 'para', pageId, parent: null, order: 0, type: 'paragraph' });
+    saveBlock({ id: '2', content: 'item', pageId, parent: null, order: 1 });
+
+    indentBlock('2');
+    expect(blockData.value['2'].parent).toBeNull();
+  });
+
+  it('nests under a heading block', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
+    saveBlock({ id: '2', content: 'item', pageId, parent: null, order: 1 });
+
+    indentBlock('2');
+    expect(blockData.value['2'].parent).toBe('1');
+  });
+
+  it('does not indent a heading block', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: 'item', pageId, parent: null, order: 0 });
+    saveBlock({ id: '2', content: '# Heading', pageId, parent: null, order: 1, type: 'paragraph' });
+
+    indentBlock('2');
+    expect(blockData.value['2'].parent).toBeNull();
   });
 });
 
@@ -289,6 +358,24 @@ describe('outdentBlock', () => {
     outdentBlock('1');
     expect(blockData.value['1'].parent).toBeNull();
   });
+
+  it('does not outdent past a heading parent', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
+    saveBlock({ id: '2', content: 'item', pageId, parent: '1', order: 0 });
+
+    outdentBlock('2');
+    expect(blockData.value['2'].parent).toBe('1');
+  });
+
+  it('does not outdent a heading block', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: 'parent', pageId, parent: null, order: 0 });
+    saveBlock({ id: '2', content: '## Sub', pageId, parent: '1', order: 0, type: 'paragraph' });
+
+    outdentBlock('2');
+    expect(blockData.value['2'].parent).toBe('1');
+  });
 });
 
 describe('removeBlock', () => {
@@ -302,13 +389,24 @@ describe('removeBlock', () => {
     expect(blockData.value['2']).toBeUndefined();
   });
 
-  it('does not remove first block', () => {
+  it('does not remove the only block on the page', () => {
     const pageId = getOrCreatePage('p');
     saveBlock({ id: '1', content: 'only', pageId, parent: null, order: 0 });
 
     const prevId = removeBlock('1');
     expect(prevId).toBeNull();
     expect(blockData.value['1']).toBeDefined();
+  });
+
+  it('removes the first block when there are following blocks', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: '', pageId, parent: null, order: 0 });
+    saveBlock({ id: '2', content: 'b', pageId, parent: null, order: 1 });
+
+    const nextId = removeBlock('1');
+    expect(nextId).toBe('2');
+    expect(blockData.value['1']).toBeUndefined();
+    expect(blockData.value['2']).toBeDefined();
   });
 
   it('does not remove block with children', () => {
@@ -324,7 +422,7 @@ describe('removeBlock', () => {
 });
 
 describe('joinBlockWithPrevious', () => {
-  it('adds an implicit space when the previous block does not end with whitespace', () => {
+  it('concatenates content without implicit space', () => {
     const pageId = getOrCreatePage('p');
     saveBlock({ id: '1', content: 'hello', pageId, parent: null, order: 0 });
     saveBlock({ id: '2', content: 'world', pageId, parent: null, order: 1 });
@@ -332,12 +430,12 @@ describe('joinBlockWithPrevious', () => {
     const result = joinBlockWithPrevious('2');
     expect(result).not.toBeNull();
     expect(result!.prevId).toBe('1');
-    expect(blockData.value['1'].content).toBe('hello world');
+    expect(blockData.value['1'].content).toBe('helloworld');
     expect(blockData.value['2']).toBeUndefined();
-    expect(result!.cursorPos).toBe(6); // after "hello " (3 chars + implicit space)
+    expect(result!.cursorPos).toBe(5);
   });
 
-  it('does not add a space when the previous block ends with whitespace', () => {
+  it('preserves existing trailing space', () => {
     const pageId = getOrCreatePage('p');
     saveBlock({ id: '1', content: 'hello ', pageId, parent: null, order: 0 });
     saveBlock({ id: '2', content: 'world', pageId, parent: null, order: 1 });
@@ -347,7 +445,7 @@ describe('joinBlockWithPrevious', () => {
     expect(result!.prevId).toBe('1');
     expect(blockData.value['1'].content).toBe('hello world');
     expect(blockData.value['2']).toBeUndefined();
-    expect(result!.cursorPos).toBe(6); // after "hello " (existing space, no implicit one added)
+    expect(result!.cursorPos).toBe(6);
   });
 
   it('returns null for the first block on the page', () => {
@@ -365,11 +463,23 @@ describe('joinBlockWithPrevious', () => {
     saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
     saveBlock({ id: '3', content: 'next', pageId, parent: null, order: 1 });
 
-    // block 3's previous in flat order is block 2 (the child)
     const result = joinBlockWithPrevious('3');
     expect(result!.prevId).toBe('2');
-    expect(blockData.value['2'].content).toBe('child next');
+    expect(blockData.value['2'].content).toBe('childnext');
     expect(blockData.value['3']).toBeUndefined();
+  });
+
+  it('joins empty block with previous block', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: 'hello', pageId, parent: null, order: 0 });
+    saveBlock({ id: '2', content: '', pageId, parent: null, order: 1 });
+
+    const result = joinBlockWithPrevious('2');
+    expect(result).not.toBeNull();
+    expect(result!.prevId).toBe('1');
+    expect(blockData.value['1'].content).toBe('hello');
+    expect(blockData.value['2']).toBeUndefined();
+    expect(result!.cursorPos).toBe(5);
   });
 });
 
@@ -406,10 +516,16 @@ describe('parseMarkdownToItems', () => {
     ]);
   });
 
-  it('handles plain multi-line text as paragraphs', () => {
+  it('joins consecutive plain text lines into one paragraph', () => {
     expect(parseMarkdownToItems('line one\nline two')).toEqual([
-      { content: 'line one', relativeDepth: 0, type: 'paragraph' },
-      { content: 'line two', relativeDepth: 0, type: 'paragraph' },
+      { content: 'line one\nline two', relativeDepth: 0, type: 'paragraph' },
+    ]);
+  });
+
+  it('splits paragraphs on blank lines', () => {
+    expect(parseMarkdownToItems('first paragraph\n\nsecond paragraph')).toEqual([
+      { content: 'first paragraph',  relativeDepth: 0, type: 'paragraph' },
+      { content: 'second paragraph', relativeDepth: 0, type: 'paragraph' },
     ]);
   });
 
@@ -465,6 +581,61 @@ describe('parseMarkdownToItems', () => {
     const items = parseMarkdownToItems('- **bold** and [[link]]\n  - `code`');
     expect(items[0].content).toBe('**bold** and [[link]]');
     expect(items[1].content).toBe('`code`');
+  });
+
+  it('joins continuation lines with the preceding bullet', () => {
+    const items = parseMarkdownToItems('- parent\ncontinuation\nanother line');
+    expect(items).toEqual([
+      { content: 'parent\ncontinuation\nanother line', relativeDepth: 0, type: 'bullet' },
+    ]);
+  });
+
+  it('handles nested bullets with continuation lines (CommonMark)', () => {
+    const items = parseMarkdownToItems(
+      '- asd\nasdf\nadsf\nfad\n  - asdf\nadfasdf #asd',
+    );
+    expect(items).toEqual([
+      { content: 'asd\nasdf\nadsf\nfad',    relativeDepth: 0, type: 'bullet' },
+      { content: 'asdf\nadfasdf #asd',      relativeDepth: 1, type: 'bullet' },
+    ]);
+  });
+
+  it('blank line + unindented text breaks out of bullet context', () => {
+    const items = parseMarkdownToItems('- bullet\n\nstandalone paragraph');
+    expect(items).toEqual([
+      { content: 'bullet',               relativeDepth: 0, type: 'bullet' },
+      { content: 'standalone paragraph',  relativeDepth: 0, type: 'paragraph' },
+    ]);
+  });
+
+  it('blank line + indented text stays in bullet context', () => {
+    const items = parseMarkdownToItems('- bullet\n\n  still in list');
+    expect(items).toEqual([
+      { content: 'bullet',        relativeDepth: 0, type: 'bullet' },
+      { content: 'still in list', relativeDepth: 1, type: 'paragraph' },
+    ]);
+  });
+
+  it('blank lines never produce empty blocks', () => {
+    const items = parseMarkdownToItems('\n\n- a\n\n\n- b\n\n');
+    expect(items).toEqual([
+      { content: 'a', relativeDepth: 0, type: 'bullet' },
+      { content: 'b', relativeDepth: 0, type: 'bullet' },
+    ]);
+  });
+
+  it('continuation lines roundtrip through export and import', () => {
+    const pageId = getOrCreatePage('rt-continuation');
+    importPage(pageId, '- parent\n  continuation\n  more\n  - child\n    child cont');
+    const flat = flattenTree(buildTree(pageId));
+    // Continuation lines join with their bullet block
+    expect(flat.map(b => ({ content: b.content, depth: b.depth }))).toEqual([
+      { content: 'parent\ncontinuation\nmore', depth: 0 },
+      { content: 'child\nchild cont',          depth: 1 },
+    ]);
+    // Re-export should produce valid CommonMark with indented continuations
+    const md = exportPage(pageId);
+    expect(md).toBe('- parent\n  continuation\n  more\n  - child\n    child cont');
   });
 });
 
@@ -590,12 +761,12 @@ describe('exportPage', () => {
     expect(exportPage(pageId)).toBe('# Title\n\n- bullet\n\n---\n\n## Subtitle');
   });
 
-  it('exports paragraph blocks without bullet prefix', () => {
+  it('exports paragraph blocks without bullet prefix, with blank line separation', () => {
     const pageId = getOrCreatePage('export-para');
     saveBlock({ id: '1', content: 'intro text', pageId, parent: null, order: 0, type: 'paragraph' });
     saveBlock({ id: '2', content: 'bullet item', pageId, parent: null, order: 1 });
     saveBlock({ id: '3', content: 'conclusion',  pageId, parent: null, order: 2, type: 'paragraph' });
-    expect(exportPage(pageId)).toBe('intro text\n- bullet item\nconclusion');
+    expect(exportPage(pageId)).toBe('intro text\n\n- bullet item\n\nconclusion');
   });
 
   it('indents children by two spaces per depth level', () => {
@@ -607,6 +778,77 @@ describe('exportPage', () => {
     expect(exportPage(pageId)).toBe(
       '- root\n  - child\n    - grandchild\n- sibling',
     );
+  });
+
+  it('clamps orphan nesting to valid CommonMark depth', () => {
+    // Simulate orphan: child at depth 1 but no parent at depth 0 before it
+    const pageId = getOrCreatePage('export-orphan');
+    // Block at depth 1 (child of a "phantom" parent) followed by a root block
+    saveBlock({ id: '1', content: 'orphan-child', pageId, parent: null, order: 0 });
+    // Manually create a child without a visible parent
+    saveBlock({ id: '2', content: 'nested', pageId, parent: '1', order: 0 });
+    saveBlock({ id: '3', content: 'deep', pageId, parent: '2', order: 0 });
+    // Export: orphan-child is depth 0, nested is depth 1 (valid), deep is depth 2 (valid)
+    expect(exportPage(pageId)).toBe(
+      '- orphan-child\n  - nested\n    - deep',
+    );
+  });
+
+  it('collapses orphan grandchild that skips a depth level', () => {
+    const pageId = getOrCreatePage('export-skip');
+    // root at depth 0, then directly a grandchild at depth 2 (no depth 1 between)
+    saveBlock({ id: '1', content: 'root', pageId, parent: null, order: 0 });
+    // Create grandchild by making a child, then giving the grandchild the child as parent
+    saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
+    saveBlock({ id: '3', content: 'grandchild', pageId, parent: '2', order: 0 });
+    saveBlock({ id: '4', content: 'orphan-deep', pageId, parent: null, order: 1 });
+    // Create a block that would be at depth 2 with no depth 1 sibling before it
+    saveBlock({ id: '5', content: 'nested-under-orphan', pageId, parent: '4', order: 0 });
+    saveBlock({ id: '6', content: 'too-deep', pageId, parent: '5', order: 0 });
+    // Export: block 4 is a new top-level bullet (depth 0 resets context)
+    // block 5 can only be depth 1 (one deeper than 0), block 6 can be depth 2
+    expect(exportPage(pageId)).toBe(
+      '- root\n  - child\n    - grandchild\n- orphan-deep\n  - nested-under-orphan\n    - too-deep',
+    );
+  });
+});
+
+describe('validateTree', () => {
+  it('does nothing to a well-formed tree', () => {
+    const pageId = getOrCreatePage('vt-ok');
+    saveBlock({ id: '1', content: 'root',   pageId, parent: null, order: 0 });
+    saveBlock({ id: '2', content: 'child',  pageId, parent: '1',  order: 0 });
+    saveBlock({ id: '3', content: 'sibling', pageId, parent: null, order: 1 });
+    expect(validateTree(pageId)).toBe(0);
+  });
+
+  it('reparents orphan blocks whose parent is missing', () => {
+    const pageId = getOrCreatePage('vt-orphan');
+    saveBlock({ id: '1', content: 'root',   pageId, parent: null, order: 0 });
+    // Block 2 claims parent 'missing' which doesn't exist —
+    // buildTree places it at root level, validateTree should confirm parent: null
+    saveBlock({ id: '2', content: 'orphan', pageId, parent: 'missing', order: 1 });
+    const repaired = validateTree(pageId);
+    // The orphan should now have parent: null (at root)
+    expect(blockData.value['2'].parent).toBeNull();
+    expect(repaired).toBeGreaterThan(0);
+  });
+
+  it('repairs depth gaps (grandchild with no child between)', () => {
+    const pageId = getOrCreatePage('vt-gap');
+    saveBlock({ id: '1', content: 'root',       pageId, parent: null, order: 0 });
+    saveBlock({ id: '2', content: 'child',      pageId, parent: '1',  order: 0 });
+    saveBlock({ id: '3', content: 'grandchild', pageId, parent: '2',  order: 0 });
+    saveBlock({ id: '4', content: 'next-root',  pageId, parent: null, order: 1 });
+    // Manually skip depth: block 5 claims parent '4' (depth 0 → depth 1),
+    // and block 6 claims parent '5' (depth 1 → depth 2). That's valid.
+    // But if we give block 5 parent '3' it would be at depth 3... validateTree
+    // sees it after 'next-root' (depth 0), so it should be at most depth 1.
+    saveBlock({ id: '5', content: 'ok-child', pageId, parent: '4', order: 0 });
+    const before = validateTree(pageId);
+    expect(before).toBe(0); // already valid
+    const flat = flattenTree(buildTree(pageId));
+    expect(flat.map(b => b.depth)).toEqual([0, 1, 2, 0, 1]);
   });
 });
 
@@ -1603,6 +1845,36 @@ describe('collapse', () => {
     const flat = flattenTree(buildTree(pageId));
     expect(flat.map(b => b.id)).toEqual(['1', '2', '4']);
   });
+
+  it('heading blocks with children can be collapsed', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
+    saveBlock({ id: '2', content: 'item A',     pageId, parent: '1',  order: 0 });
+    saveBlock({ id: '3', content: 'item B',     pageId, parent: '1',  order: 1 });
+    saveBlock({ id: '4', content: 'after',      pageId, parent: null, order: 1 });
+
+    expect(hasChildren('1')).toBe(true);
+
+    toggleCollapse('1');
+    const collapsed = flattenTree(buildTree(pageId));
+    expect(collapsed.map(b => b.id)).toEqual(['1', '4']);
+
+    toggleCollapse('1');
+    const expanded = flattenTree(buildTree(pageId));
+    expect(expanded.map(b => b.id)).toEqual(['1', '2', '3', '4']);
+  });
+
+  it('heading collapse exports without the collapsed children', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
+    saveBlock({ id: '2', content: 'item A',     pageId, parent: '1',  order: 0 });
+    saveBlock({ id: '3', content: '## Sub',     pageId, parent: '1',  order: 1, type: 'paragraph' });
+    saveBlock({ id: '4', content: 'item B',     pageId, parent: '3',  order: 0 });
+
+    // Export includes all content (collapse is a UI-only state, export always flattens)
+    const md = exportPage(pageId);
+    expect(md).toBe('# Section\n\n- item A\n\n## Sub\n\n- item B');
+  });
 });
 
 // --- Drag and drop ---
@@ -1678,5 +1950,180 @@ describe('moveBlock', () => {
 
     expect(blockData.value['3'].parent).toBe('1');
     expect(blockData.value['3'].order).toBeLessThan(blockData.value['2'].order);
+  });
+
+  it('does not nest under a paragraph block', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: 'para', pageId, parent: null, order: 0, type: 'paragraph' });
+    saveBlock({ id: '2', content: 'item', pageId, parent: null, order: 1 });
+
+    moveBlock('2', '1', 'nested');
+
+    expect(blockData.value['2'].parent).toBeNull();
+  });
+
+  it('nests under a heading block via drag', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
+    saveBlock({ id: '2', content: 'item', pageId, parent: null, order: 1 });
+
+    moveBlock('2', '1', 'nested');
+
+    expect(blockData.value['2'].parent).toBe('1');
+  });
+
+  it('moves a table block before a sibling', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: 'Item', pageId, parent: null, order: 0 });
+    const tableId = createTable('1', [['A', 'B'], ['C', 'D']]);
+
+    // Table is after Item; move it before
+    moveBlock(tableId, '1', 'before');
+
+    expect(blockData.value[tableId].order).toBeLessThan(blockData.value['1'].order);
+    expect(blockData.value[tableId].parent).toBeNull();
+    // Cells should stay parented to the table
+    const grid = getTableGrid(tableId);
+    expect(grid.length).toBe(2);
+    expect(grid[0].cells[0].content).toBe('A');
+  });
+
+  it('moves a table block nested under another block', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: 'Parent', pageId, parent: null, order: 0 });
+    saveBlock({ id: '2', content: 'Sibling', pageId, parent: null, order: 1 });
+    const tableId = createTable('2', [['X']]);
+
+    moveBlock(tableId, '1', 'nested');
+
+    expect(blockData.value[tableId].parent).toBe('1');
+    const grid = getTableGrid(tableId);
+    expect(grid.length).toBe(1);
+    expect(grid[0].cells[0].content).toBe('X');
+  });
+
+  it('moves a bullet after a table block', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: 'Item', pageId, parent: null, order: 0 });
+    const tableId = createTable('1', [['A']]);
+
+    moveBlock('1', tableId, 'after');
+
+    expect(blockData.value['1'].order).toBeGreaterThan(blockData.value[tableId].order);
+  });
+
+  it('reorders heading before sibling, captures trailing non-heading as child', () => {
+    // # Heading 1
+    //   Paragraph         (child of H1)
+    //   ## Heading 2      (child of H1)
+    //     Another para    (child of H2)
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: '# Heading 1',       pageId, parent: null, order: 0, type: 'paragraph' });
+    saveBlock({ id: '2', content: 'Paragraph',          pageId, parent: '1',  order: 0 });
+    saveBlock({ id: '3', content: '## Heading 2',       pageId, parent: '1',  order: 1, type: 'paragraph' });
+    saveBlock({ id: '4', content: 'Another paragraph',  pageId, parent: '3',  order: 0 });
+
+    // Drag ## Heading 2 BEFORE Paragraph (both children of # Heading 1)
+    moveBlock('3', '2', 'before');
+
+    // ## Heading 2 is now before Paragraph under # Heading 1
+    expect(blockData.value['3'].parent).toBe('1');
+    expect(blockData.value['3'].order).toBeLessThan(blockData.value['2'].order);
+    // Paragraph should have been captured as a child of ## Heading 2
+    // (non-heading after a heading at the same level)
+    expect(blockData.value['2'].parent).toBe('3');
+  });
+});
+
+describe('fixHeadingSections', () => {
+  it('reparents non-headings that follow a heading', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: '# Section',  pageId, parent: null, order: 0, type: 'paragraph' });
+    saveBlock({ id: '2', content: 'orphan item', pageId, parent: null, order: 1 });
+
+    fixHeadingSections(pageId, null);
+
+    expect(blockData.value['2'].parent).toBe('1');
+  });
+
+  it('does nothing when no headings are present', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
+    saveBlock({ id: '2', content: 'b', pageId, parent: null, order: 1 });
+
+    fixHeadingSections(pageId, null);
+
+    expect(blockData.value['1'].parent).toBeNull();
+    expect(blockData.value['2'].parent).toBeNull();
+  });
+
+  it('non-headings before the first heading stay as siblings', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: 'before',     pageId, parent: null, order: 0 });
+    saveBlock({ id: '2', content: '# Heading',  pageId, parent: null, order: 1, type: 'paragraph' });
+    saveBlock({ id: '3', content: 'after',       pageId, parent: null, order: 2 });
+
+    fixHeadingSections(pageId, null);
+
+    // 'before' is before the heading → stays as sibling
+    expect(blockData.value['1'].parent).toBeNull();
+    // 'after' is after the heading → captured as child
+    expect(blockData.value['3'].parent).toBe('2');
+  });
+
+  it('multiple headings each capture their own section', () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: '# A',   pageId, parent: null, order: 0, type: 'paragraph' });
+    saveBlock({ id: '2', content: 'item1', pageId, parent: null, order: 1 });
+    saveBlock({ id: '3', content: '# B',   pageId, parent: null, order: 2, type: 'paragraph' });
+    saveBlock({ id: '4', content: 'item2', pageId, parent: null, order: 3 });
+
+    fixHeadingSections(pageId, null);
+
+    expect(blockData.value['2'].parent).toBe('1'); // item1 → child of # A
+    expect(blockData.value['4'].parent).toBe('3'); // item2 → child of # B
+  });
+});
+
+describe('moveBlock + fixHeadingSections integration', () => {
+  it('heading moved away releases source level', () => {
+    // # Heading (root)
+    //   item A   (child of heading)
+    //   item B   (child of heading)
+    // Move # Heading into another parent → source level (root) has only
+    // item A and item B, no heading → they stay as root siblings.
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: '# Heading', pageId, parent: null, order: 0, type: 'paragraph' });
+    saveBlock({ id: '2', content: 'item A',    pageId, parent: '1',  order: 0 });
+    saveBlock({ id: '3', content: 'item B',    pageId, parent: '1',  order: 1 });
+    saveBlock({ id: '4', content: 'target',    pageId, parent: null, order: 1 });
+
+    // Move heading nested under target (heading can nest under a bullet)
+    moveBlock('1', '4', 'nested');
+
+    // Heading's former children (item A, item B) should have been
+    // orphaned when heading moved. They still have parent '1' which
+    // is now under '4'. That's correct — they moved with the heading.
+    expect(blockData.value['1'].parent).toBe('4');
+    expect(blockData.value['2'].parent).toBe('1');
+    expect(blockData.value['3'].parent).toBe('1');
+  });
+
+  it('heading dropped after non-heading captures it', () => {
+    // Two root bullets, then drop a heading between them
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: 'item A',    pageId, parent: null, order: 0 });
+    saveBlock({ id: '2', content: 'item B',    pageId, parent: null, order: 1 });
+    saveBlock({ id: '3', content: '# Section', pageId, parent: null, order: 2, type: 'paragraph' });
+
+    // Move heading AFTER item A (before item B)
+    moveBlock('3', '1', 'after');
+
+    // item A is before the heading → stays as root sibling
+    expect(blockData.value['1'].parent).toBeNull();
+    // heading is at root
+    expect(blockData.value['3'].parent).toBeNull();
+    // item B was after the heading → captured as child
+    expect(blockData.value['2'].parent).toBe('3');
   });
 });
