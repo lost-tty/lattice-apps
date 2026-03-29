@@ -11,18 +11,6 @@ const enc = new TextEncoder();
 const encode = (s: string): Uint8Array => enc.encode(s);
 const decode = (b: Uint8Array): string => new TextDecoder().decode(b);
 
-/** Unwrap List response — the proto message wraps the repeated field;
- *  the field name varies by schema, so find the first array. */
-function unwrapList(resp: unknown): { key: Uint8Array; value: Uint8Array }[] {
-  if (Array.isArray(resp)) return resp;
-  if (resp != null && typeof resp === 'object') {
-    for (const v of Object.values(resp)) {
-      if (Array.isArray(v)) return v;
-    }
-  }
-  return [];
-}
-
 // --- Key prefixes ---
 
 const PREFIX = {
@@ -63,7 +51,7 @@ class EntityCollection<T extends { id: string }> {
   /** Load all entries from the store under this prefix. */
   async load(store: Store): Promise<void> {
     this.store = store;
-    const entries = unwrapList(await store.List({ prefix: encode(this.prefix) }));
+    const entries = (await store.List({ prefix: encode(this.prefix) })).items;
     for (const e of entries) {
       const key = decode(e.key);
       const id = key.slice(this.prefix.length);
@@ -166,7 +154,7 @@ export class AppStore {
 
   /** Migrate old "todo/" keys to "task/" format. */
   private async migrateLegacy(store: Store): Promise<void> {
-    const entries = unwrapList(await store.List({ prefix: encode(LEGACY_PREFIX) }));
+    const entries = (await store.List({ prefix: encode(LEGACY_PREFIX) })).items;
     if (entries.length === 0) return;
 
     for (const e of entries) {

@@ -23,12 +23,6 @@ declare const LatticeSDK: { connect(): Promise<{ openAppStore(): Promise<Store> 
 const encode = (s: string) => new TextEncoder().encode(s);
 const decode = (b: Uint8Array) => new TextDecoder().decode(b);
 
-function unwrapList(resp: unknown): { key: Uint8Array; value: Uint8Array }[] {
-  if (Array.isArray(resp)) return resp;
-  if (resp != null && typeof resp === 'object')
-    for (const v of Object.values(resp)) if (Array.isArray(v)) return v;
-  return [];
-}
 
 // --- Data types ---
 
@@ -200,7 +194,7 @@ async function main() {
 
     // Load columns
     const cols: Record<string, Col> = {};
-    for (const e of unwrapList(await store.List({ prefix: encode('col/') }))) {
+    for (const e of (await store.List({ prefix: encode('col/') })).items) {
       try { const id = decode(e.key).slice(4); cols[id] = { id, ...JSON.parse(decode(e.value)) }; }
       catch (err) { console.warn('[kanban] bad column:', err); }
     }
@@ -211,7 +205,7 @@ async function main() {
 
     // Load cards
     const cards: Record<string, Card> = {};
-    for (const e of unwrapList(await store.List({ prefix: encode('card/') }))) {
+    for (const e of (await store.List({ prefix: encode('card/') })).items) {
       try { const id = decode(e.key).slice(5); cards[id] = { id, ...JSON.parse(decode(e.value)) }; }
       catch (err) { console.warn('[kanban] bad card:', err); }
     }

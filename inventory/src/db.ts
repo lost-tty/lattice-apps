@@ -22,17 +22,6 @@ const enc = new TextEncoder();
 const encode = (s: string): Uint8Array => enc.encode(s);
 const decode = (b: Uint8Array): string => new TextDecoder().decode(b);
 
-/** Unwrap List response — the proto message wraps the repeated field;
- *  the field name varies by schema, so find the first array. */
-function unwrapList(resp: unknown): { key: Uint8Array; value: Uint8Array }[] {
-  if (Array.isArray(resp)) return resp;
-  if (resp != null && typeof resp === 'object') {
-    for (const v of Object.values(resp)) {
-      if (Array.isArray(v)) return v;
-    }
-  }
-  return [];
-}
 
 // --- DataStore ---
 
@@ -61,7 +50,7 @@ export class DataStore {
     this.onSync('syncing');
 
     try {
-      const entries = unwrapList(await this.store.List({ prefix: encode(KEY_PREFIX) }));
+      const entries = (await this.store.List({ prefix: encode(KEY_PREFIX) })).items;
       const newItems = new Map<string, Item>();
 
       for (const e of entries) {

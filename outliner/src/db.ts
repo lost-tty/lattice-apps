@@ -14,13 +14,6 @@ const encode = (s: string) => new TextEncoder().encode(s);
 const decode = (b: Uint8Array) => new TextDecoder().decode(b);
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-function unwrapList(resp: unknown): { key: Uint8Array; value: Uint8Array }[] {
-  if (Array.isArray(resp)) return resp;
-  if (resp != null && typeof resp === 'object')
-    for (const v of Object.values(resp)) if (Array.isArray(v)) return v;
-  return [];
-}
-
 // --- Reactive state ---
 
 let store: Store;
@@ -47,7 +40,7 @@ export async function init(s: Store) {
   store = s;
 
   const pages: Record<string, Page> = {};
-  for (const e of unwrapList(await store.List({ prefix: encode('page/') }))) {
+  for (const e of (await store.List({ prefix: encode('page/') })).items) {
     try {
       const id = decode(e.key).slice(5); // 'page/'.length === 5
       pages[id] = { id, ...JSON.parse(decode(e.value)) };
@@ -56,7 +49,7 @@ export async function init(s: Store) {
   pageData.value = pages;
 
   const blocks: Record<string, Block> = {};
-  for (const e of unwrapList(await store.List({ prefix: encode('block/') }))) {
+  for (const e of (await store.List({ prefix: encode('block/') })).items) {
     try {
       const id = decode(e.key).slice(6); // 'block/'.length === 6
       blocks[id] = { id, ...JSON.parse(decode(e.value)) };
