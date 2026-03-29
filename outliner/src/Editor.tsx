@@ -15,7 +15,7 @@ import {
   activeBlockId, currentPage, blockData,
   saveBlock, deleteBlock, buildTree, flattenTree, hasChildren, toggleCollapse,
   createBlockAfter, createChildBlock, indentBlock, outdentBlock, removeBlock, joinBlockWithPrevious, moveBlock, isDescendant,
-  blockKind, canAcceptChildren, isCollapsed,
+  blockKind, canAcceptChildren, isCollapsed, blockToMarkdown, markdownToBlock,
   createTable, insertTableRow, insertTableCol, reorderTableRow, reorderTableCol, deleteTableRow, deleteTableCol,
   parseMarkdownToItems, insertBlocksAfter, exportPage,
   renderContent, parseHeading, parseTodoStatus, cycleTodoStatus, toggleCheckbox, isTableRow, isTableSeparator, parseTableCells, getTableGrid,
@@ -115,9 +115,20 @@ function startBlockDrag(e: DragEvent, blockId: string) {
   dragBlockId = blockId;
   e.dataTransfer!.effectAllowed = 'move';
   e.dataTransfer!.setData('text/plain', blockId);
-  requestAnimationFrame(() => {
-    (e.target as HTMLElement).closest('.block')?.classList.add('dragging');
-  });
+  const block = (e.target as HTMLElement).closest('.block') as HTMLElement;
+  if (block) {
+    e.dataTransfer!.setDragImage(block, 0, block.offsetHeight / 2);
+    requestAnimationFrame(() => block.classList.add('dragging'));
+  }
+}
+
+/** Return the content template for a new sibling of this block.
+ *  Checkboxes continue unchecked, todo keywords carry over, etc. */
+function continuationContent(block: Block): string {
+  const { status } = parseTodoStatus(block.content);
+  if (status) return status === 'done' || status === 'cancelled' ? '' : `${status.toUpperCase()} `;
+  if (block.content.match(/^\[[ xX]\] /)) return '[ ] ';
+  return '';
 }
 
 // --- Block component ---
@@ -128,22 +139,18 @@ function BlockItem({ node }: { node: FlatBlock }) {
   const hasKids = hasChildren(node.id);
   const isHr = node.content === '---';
 
-  // Enter edit mode: swap rendered HTML for plain text, preserve caret.
+  // Edit mode: show markdown source.
+  const md = blockToMarkdown(node);
+  const prefixLen = md.length - node.content.length;
+
   useLayoutEffect(() => {
     if (!isActive || !ref.current) return;
     const el = ref.current;
-    // If activated programmatically (Enter/Tab/Arrow), set content and place cursor.
-    // If activated by click, the browser already placed the caret — just swap to plain text.
     const activation = pendingActivation?.blockId === node.id ? pendingActivation : null;
     pendingActivation = null;
-    el.textContent = node.content;
+    el.textContent = md;
     el.focus();
-    if (activation) {
-      setCursor(el, activation.cursor, 0);
-    } else {
-      // Place cursor at end as fallback (click handler places it before this runs)
-      setCursor(el, 'end', 0);
-    }
+    setCursor(el, activation?.cursor ?? 'end', prefixLen);
   }, [isActive]);
 
   // View mode: render formatted HTML.
@@ -152,8 +159,9 @@ function BlockItem({ node }: { node: FlatBlock }) {
     if (isActive || !ref.current) return;
     const { status, text: statusText } = parseTodoStatus(node.content);
     const { text } = parseHeading(statusText);
+    const bullet = isPara ? '' : '<span class="bullet-marker"></span>';
     const marker = status ? `<span class="todo-marker ${status}"></span>` : '';
-    ref.current.innerHTML = marker + `<span>${renderContent(text) || '<br>'}</span>`;
+    ref.current.innerHTML = bullet + marker + `<span>${renderContent(text) || '<br>'}</span>`;
     if (collapsed) {
       const el = document.createElement('span');
       el.className = 'collapsed-ellipsis';
@@ -163,19 +171,19 @@ function BlockItem({ node }: { node: FlatBlock }) {
     }
   }, [isActive, node.content, collapsed]);
 
-  /** Read content from the editor and save if changed. */
+  /** Parse editor text back to block fields and save. */
   function saveFromEditor() {
-    const content = ref.current?.textContent || '';
+    const { type, content } = markdownToBlock(ref.current?.textContent || '');
     const current = blockData.value[node.id];
     if (!current) return;
-    if (content !== current.content) {
-      saveBlock({ ...current, content });
+    if (content !== current.content || type !== current.type) {
+      saveBlock({ ...current, content, type });
     }
   }
 
   function handleKeyDown(e: KeyboardEvent) {
     const el = ref.current!;
-    const content = el.textContent || '';
+    const { type: parsedType, content } = markdownToBlock(el.textContent || '');
 
     // Undo / Redo
     if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
@@ -188,7 +196,6 @@ function BlockItem({ node }: { node: FlatBlock }) {
     if (e.key === 'Enter') {
       e.preventDefault();
 
-      // If the block content is a table row, convert it to a table
       const cells = parseTableCells(content);
       if (cells && cells.length > 0) {
         beginUndo('create table');
@@ -200,23 +207,22 @@ function BlockItem({ node }: { node: FlatBlock }) {
         return;
       }
 
-      const offset = getCursorOffset(el);
-      const before = content.slice(0, offset);
-      const after = content.slice(offset);
+      const contentOffset = Math.max(0, getCursorOffset(el) - prefixLen);
+      const before = content.slice(0, contentOffset);
+      const after = content.slice(contentOffset);
 
       if (before === '') {
         beginUndo('split block');
         saveBlock({ ...node, content: '', type: 'paragraph' });
-        const newId = createBlockAfter(node.id, content, node.type);
+        const newId = createBlockAfter(node.id, content, parsedType);
         commitUndo();
         activateBlock(newId, 'start');
         return;
       }
 
       beginUndo('split block');
-      saveBlock({ ...node, content: before });
+      saveBlock({ ...node, content: before, type: parsedType });
 
-      // Headings act as parents — Enter creates a child block, not a sibling
       const { level } = parseHeading(before);
       if (level) {
         const newId = createChildBlock(node.id, after);
@@ -225,14 +231,29 @@ function BlockItem({ node }: { node: FlatBlock }) {
         return;
       }
 
-      const newId = createBlockAfter(node.id, after, node.type);
+      if (after === '') {
+        // Cursor at end — check if there's a next sibling
+        const flat = flattenTree(buildTree(node.pageId));
+        const idx = flat.findIndex(b => b.id === node.id);
+        if (idx < flat.length - 1) {
+          // Next block exists — just save and move to it
+          saveBlock({ ...node, content: before, type: parsedType });
+          commitUndo();
+          activateBlock(flat[idx + 1].id, 'end');
+          return;
+        }
+      }
+
+      const newContent = after || continuationContent(node);
+      const newId = createBlockAfter(node.id, newContent, parsedType);
       commitUndo();
-      activateBlock(newId, 'start');
+      activateBlock(newId, newContent ? 'end' : 'start');
       return;
     }
 
     if (e.key === 'Backspace') {
-      if (getCursorOffset(el) === 0 && content !== '') {
+      // Cursor at start of content (at or before prefix) → join with previous
+      if (getCursorOffset(el) <= prefixLen && content !== '') {
         e.preventDefault();
         beginUndo('join blocks');
         const joined = joinBlockWithPrevious(node.id, content);
@@ -241,6 +262,7 @@ function BlockItem({ node }: { node: FlatBlock }) {
         return;
       }
 
+      // Empty content → join or delete
       if (content === '') {
         e.preventDefault();
         beginUndo('delete block');
@@ -280,7 +302,7 @@ function BlockItem({ node }: { node: FlatBlock }) {
     }
 
     if (e.key === 'ArrowDown') {
-      if (getCursorOffset(el) === content.length) {
+      if (getCursorOffset(el) === (el.textContent?.length ?? 0)) {
         const flat = flattenTree(buildTree(node.pageId));
         const idx = flat.findIndex(b => b.id === node.id);
         if (idx < flat.length - 1) {
@@ -308,10 +330,10 @@ function BlockItem({ node }: { node: FlatBlock }) {
     e.preventDefault();
 
     const el = ref.current!;
-    const offset = getCursorOffset(el);
-    const content = el.textContent ?? '';
-    const before = content.slice(0, offset);
-    const after = content.slice(offset);
+    const contentOffset = Math.max(0, getCursorOffset(el) - prefixLen);
+    const { content } = markdownToBlock(el.textContent ?? '');
+    const before = content.slice(0, contentOffset);
+    const after = content.slice(contentOffset);
 
     const items = parseMarkdownToItems(text);
     if (items.length === 0) return;
@@ -470,7 +492,6 @@ function BlockItem({ node }: { node: FlatBlock }) {
         onClick={(e: Event) => { if (hasKids) { e.stopPropagation(); toggleCollapse(node.id); } }}
         onDragStart={(e: Event) => handleDragStart(e as DragEvent)}
       />
-      {!isPara && <span class="bullet" />}
       {isHr && !isActive ? (
         <hr onClick={handleClick} />
       ) : (
@@ -900,37 +921,29 @@ function PageSection({ pageId, titleClickable }: { pageId: string; titleClickabl
           <div
             class="block-tree-tail"
             onClick={() => {
-              if (flat.length === 0) return;
-              // Find the right insertion level: last heading's children, or root
-              let parentId: string | null = null;
-              for (let i = flat.length - 1; i >= 0; i--) {
-                if (flat[i].depth === 0 && blockKind(blockData.value[flat[i].id]) === 'heading') {
-                  parentId = flat[i].id;
-                  break;
-                }
+              const currentFlat = flattenTree(buildTree(pageId));
+              if (currentFlat.length === 0) return;
+
+              // Find the last non-table-cell block
+              let last = currentFlat[currentFlat.length - 1];
+              const lastBlock = blockData.value[last.id];
+
+              // If inside a table, walk up to the table block itself
+              if (lastBlock?.parent && blockData.value[lastBlock.parent]?.type === 'table') {
+                const tableId = lastBlock.parent;
+                last = currentFlat.find(b => b.id === tableId) ?? last;
               }
-              // Find the last sibling at that level
-              const siblings = flat.filter(b => {
-                const block = blockData.value[b.id];
-                return block && block.parent === parentId && block.type !== 'table';
-              });
-              const lastSibling = siblings[siblings.length - 1];
-              if (lastSibling) {
-                const block = blockData.value[lastSibling.id];
-                if (block && block.content === '') {
-                  activateBlock(lastSibling.id, 'start');
-                  return;
-                }
+
+              const block = blockData.value[last.id];
+              if (block && block.content.trim() === '' && block.type !== 'table') {
+                activateBlock(last.id, 'end');
+                return;
               }
-              // Create after the last block at that level
-              const allAtLevel = flat.filter(b => blockData.value[b.id]?.parent === parentId);
-              const anchor = allAtLevel[allAtLevel.length - 1];
-              if (anchor) {
-                beginUndo('new block');
-                const newId = createBlockAfter(anchor.id, '', 'paragraph');
-                commitUndo();
-                activateBlock(newId, 'start');
-              }
+
+              beginUndo('new block');
+              const newId = createBlockAfter(last.id, '', 'paragraph');
+              commitUndo();
+              activateBlock(newId, 'end');
             }}
           />
         </div>

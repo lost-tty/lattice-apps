@@ -40,10 +40,10 @@ describe('Editor focus', () => {
 
     const editDiv = document.querySelector('.block-content.editing') as HTMLElement;
     expect(editDiv).not.toBeNull();
-    expect(editDiv.textContent).toBe('hello world');
+    expect(editDiv.textContent).toBe('- hello world');
 
     // Simulate Enter: save before, create new block, switch active
-    editDiv.textContent = 'hello';
+    editDiv.textContent = '- hello';
     saveBlock({ ...blockData.value['1'], content: 'hello' });
     const newId = createBlockAfter('1', ' world');
     activeBlockId.value = newId;
@@ -74,12 +74,8 @@ describe('Editor focus', () => {
 
     const editDiv = document.querySelector('.block-content.editing') as HTMLElement;
     expect(editDiv).not.toBeNull();
-    expect(editDiv.textContent).toBe('world');
+    expect(editDiv.textContent).toBe('- world');
 
-    // Simulate what backspace at position 0 does:
-    // 1. saveFromEditor (save current block)
-    // 2. joinBlockWithPrevious (merge into block '1')
-    // 3. activate block '1'
     saveBlock({ ...blockData.value['2'], content: 'world' });
     const joined = joinBlockWithPrevious('2', 'world');
     expect(joined).not.toBeNull();
@@ -93,7 +89,7 @@ describe('Editor focus', () => {
     const mergedDiv = document.querySelector('.block-content.editing') as HTMLElement;
     expect(mergedDiv).not.toBeNull();
     expect(blockData.value['1'].content).toBe('helloworld');
-    expect(mergedDiv.textContent).toBe('helloworld');
+    expect(mergedDiv.textContent).toBe('- helloworld');
     expect(document.activeElement).toBe(mergedDiv);
   });
 
@@ -109,8 +105,8 @@ describe('Editor focus', () => {
     const editDiv = document.querySelector('.block-content.editing') as HTMLElement;
     expect(editDiv).not.toBeNull();
 
-    // Simulate Enter at offset 5 (after "hello")
-    editDiv.textContent = 'hello';
+    // Simulate Enter at offset 7 (after "- hello")
+    editDiv.textContent = '- hello';
     saveBlock({ ...blockData.value['1'], content: 'hello' });
     const newId = createBlockAfter('1', ' world');
     activeBlockId.value = newId;
@@ -121,7 +117,7 @@ describe('Editor focus', () => {
 
     const newEditDiv = document.querySelector('.block-content.editing') as HTMLElement;
     expect(newEditDiv).not.toBeNull();
-    expect(newEditDiv.textContent).toBe(' world');
+    expect(newEditDiv.textContent).toBe('-  world');
     expect(document.activeElement).toBe(newEditDiv);
   });
 });

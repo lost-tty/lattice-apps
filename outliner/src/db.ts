@@ -756,6 +756,20 @@ function maybeRebalance(pageId: string, parent: string | null) {
 
 type BlockKind = 'bullet' | 'heading' | 'paragraph' | 'table';
 
+/** Convert a block to its single-line markdown representation for editing. */
+export function blockToMarkdown(block: Block): string {
+  if (block.type === 'paragraph' || block.type === 'table') return block.content;
+  return '- ' + block.content;
+}
+
+/** Parse a single-line markdown string back into type + content. */
+export function markdownToBlock(md: string): { type: 'bullet' | 'paragraph'; content: string } {
+  if (md.startsWith('- ') || md.startsWith('* ') || md.startsWith('+ ')) {
+    return { type: 'bullet', content: md.slice(2) };
+  }
+  return { type: 'paragraph', content: md };
+}
+
 /** Determine the kind of a block. */
 export function blockKind(block: Block): BlockKind {
   if (block.type === 'table') return 'table';

@@ -642,7 +642,6 @@ body {
 .block {
   display: flex;
   align-items: center;
-  gap: calc(var(--indent) - var(--bullet-size));
   min-height: 1.75rem;
   position: relative;
   padding-left: calc(var(--depth, 0) * var(--indent));
@@ -771,32 +770,16 @@ body {
   border-radius: 4px;
 }
 
-/* --- Bullet (drag handle + visual dot) --- */
+/* --- Bullet marker (inline dot inside block-content, like todo-marker) --- */
 
-.bullet {
-  width: var(--bullet-size);
-  height: var(--bullet-size);
-  flex-shrink: 0;
-  cursor: grab;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.bullet:hover {
-  background: var(--border);
-}
-
-/* Default: small dot centred in the bullet area */
-.bullet::after {
-  content: '';
+.bullet-marker {
   width: 6px;
   height: 6px;
   background: var(--bullet);
   border-radius: 50%;
+  flex-shrink: 0;
+  margin-left: 0.3em;
 }
-
 
 .block-content {
   flex: 1;
@@ -900,18 +883,16 @@ s {
 
 .block-content {
   display: flex;
-  align-items: flex-start;
-  gap: 6px;
+  align-items: center;
+  gap: 1ch;
 }
 
 .todo-marker {
-  display: inline-block;
   width: 16px;
   height: 16px;
   border: 2px solid var(--bullet);
   border-radius: 3px;
   flex-shrink: 0;
-  margin-top: 4px;
   cursor: pointer;
 }
 
