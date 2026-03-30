@@ -826,6 +826,10 @@ code {
   border-radius: 3px;
 }
 
+code.math-error {
+  color: var(--delete-hover);
+}
+
 mark {
   background: var(--highlight);
   padding: 2px 4px;

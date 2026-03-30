@@ -1075,6 +1075,25 @@ describe('renderContent', () => {
     expect(parseAnnotations('No annotations')).toEqual({ text: 'No annotations', kanban: false, hl: null });
   });
 
+  it('renders inline math $...$', () => {
+    const html = renderContent('Energy is $E=mc^2$ right?');
+    expect(html).toContain('<math>');
+    expect(html).toContain('Energy is');
+    expect(html).toContain('right?');
+  });
+
+  it('renders display math $$...$$', () => {
+    const html = renderContent('$$\\frac{a}{b}$$');
+    expect(html).toContain('<math');
+    expect(html).toContain('display="block"');
+  });
+
+  it('does not render math inside code spans', () => {
+    const html = renderContent('`$x^2$`');
+    expect(html).toContain('<code>');
+    expect(html).not.toContain('<math>');
+  });
+
   it('renders highlight', () => {
     expect(renderContent('==important==')).toContain('<mark>important</mark>');
   });

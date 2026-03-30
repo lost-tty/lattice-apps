@@ -7,7 +7,7 @@
 
 import { signal, computed } from '@preact/signals';
 import type { Store, Page, Block, BlockNode, WatchEvent } from './types';
-
+import temml from 'temml';
 // --- Encoding ---
 
 const encode = (s: string) => new TextEncoder().encode(s);
@@ -1522,14 +1522,31 @@ export function parseTableCells(text: string): string[] | null {
 }
 
 /** Render block content to HTML with markdown, wiki links, and tags. */
+function renderMath(tex: string, displayMode: boolean): string {
+  try {
+    return temml.renderToString(tex, { displayMode });
+  } catch { return `<code class="math-error">${tex}</code>`; }
+}
+
 export function renderContent(text: string): string {
   let html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-  // Extract code spans first (protect inner content from formatting)
-  const codes: string[] = [];
+  // Extract code spans and math first (protect from formatting)
+  const slots: string[] = [];
+  // Display math $$...$$ (must come before inline $...$)
+  html = html.replace(/\$\$(.+?)\$\$/g, (_, tex) => {
+    slots.push(renderMath(tex, true));
+    return `\x00S${slots.length - 1}\x00`;
+  });
+  // Inline math $...$
+  html = html.replace(/\$(.+?)\$/g, (_, tex) => {
+    slots.push(renderMath(tex, false));
+    return `\x00S${slots.length - 1}\x00`;
+  });
+  // Code spans
   html = html.replace(/`([^`]+)`/g, (_, code) => {
-    codes.push(code);
-    return `\x00C${codes.length - 1}\x00`;
+    slots.push(`<code>${code}</code>`);
+    return `\x00S${slots.length - 1}\x00`;
   });
 
   html = html.replace(/(^|\s)#\[\[([^\]]+)\]\]/g, '$1<span class="tag" data-page="$2">#$2</span>');
@@ -1549,7 +1566,8 @@ export function renderContent(text: string): string {
   html = html.replace(/(^|[\s(])(https?:\/\/[^\s)<]+)/g, '$1<a class="hyperlink" href="$2" target="_blank" rel="noopener">$2</a>');
   html = html.replace(/\x00T(\d+)\x00/g, (_, i) => tags[parseInt(i)]);
 
-  html = html.replace(/\x00C(\d+)\x00/g, (_, i) => `<code>${codes[parseInt(i)]}</code>`);
+  // Restore protected slots (math + code)
+  html = html.replace(/\x00S(\d+)\x00/g, (_, i) => slots[parseInt(i)]);
 
   return html;
 }
