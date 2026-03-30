@@ -1532,11 +1532,6 @@ export function renderContent(text: string): string {
     return `\x00C${codes.length - 1}\x00`;
   });
 
-  // Markdown checkboxes — blocks already have a visual bullet, so no leading hyphen needed
-  html = html.replace(/^\[([ xX])\] /, (_, state) =>
-    `<span class="md-checkbox${state !== ' ' ? ' checked' : ''}"></span> `,
-  );
-
   html = html.replace(/(^|\s)#\[\[([^\]]+)\]\]/g, '$1<span class="tag" data-page="$2">#$2</span>');
   html = html.replace(/\[\[([^\]]+)\]\]/g, '<span class="wiki-link" data-page="$1">$1</span>');
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a class="hyperlink" href="$2" target="_blank" rel="noopener">$1</a>');
@@ -1561,12 +1556,6 @@ export function renderContent(text: string): string {
 
 
 
-/** Toggle a markdown checkbox prefix: `[ ]` ↔ `[x]` */
-export function toggleCheckbox(content: string): string {
-  if (/^\[ \] /.test(content)) return content.replace(/^\[ \] /, '[x] ');
-  if (/^\[[xX]\] /.test(content)) return content.replace(/^\[[xX]\] /, '[ ] ');
-  return content;
-}
 
 /** Extract a Markdown heading prefix (# through ######) from block content.
  *  Returns the heading level (1–6) and the text after the prefix, or level null
@@ -1588,22 +1577,24 @@ export function parseAnnotations(text: string): { text: string; kanban: boolean;
   return { text: cleaned, kanban, hl };
 }
 
-/** Extract TODO/DOING/DONE status from block content prefix. */
+/** Extract task status from block content prefix.
+ *  Supports orgmode keywords (TODO, DOING, etc.) and markdown checkboxes ([ ], [x]). */
 const TODO_KEYWORDS = ['TODO', 'DOING', 'NOW', 'LATER', 'WAIT', 'DONE', 'CANCELLED'];
 const TODO_REGEX = new RegExp(`^(${TODO_KEYWORDS.join('|')}) `);
 
 export function parseTodoStatus(content: string): { status: string | null; text: string } {
-  const match = content.match(TODO_REGEX);
-  if (!match) return { status: null, text: content };
-  // Normalise NOW → doing, CANCELLED → cancelled, etc.
-  const raw = match[1].toLowerCase();
-  const status = raw === 'now' ? 'doing' : raw;
-  return { status, text: content.slice(match[0].length) };
+  const kw = content.match(TODO_REGEX);
+  if (kw) {
+    const raw = kw[1].toLowerCase();
+    return { status: raw === 'now' ? 'doing' : raw, text: content.slice(kw[0].length) };
+  }
+  if (/^\[ \] /.test(content)) return { status: 'todo', text: content.slice(4) };
+  if (/^\[[xX]\] /.test(content)) return { status: 'done', text: content.slice(4) };
+  return { status: null, text: content };
 }
 
-/** Cycle TODO status: none → TODO → DOING → DONE → none (primary cycle).
- *  LATER, WAIT, NOW, CANCELLED are accepted on input but cycle forward to
- *  the next primary state. */
+/** Cycle task status: none → TODO → DOING → DONE → CANCELLED → none.
+ *  Checkbox prefixes are converted to keyword prefixes on cycle. */
 export function cycleTodoStatus(content: string): string {
   const { status, text } = parseTodoStatus(content);
   const next: Record<string, string> = {

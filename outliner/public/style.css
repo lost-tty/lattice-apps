@@ -951,36 +951,7 @@ s {
   color: var(--text-faint);
 }
 
-/* --- Markdown checkboxes --- */
 
-.md-checkbox {
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--bullet);
-  border-radius: 3px;
-  vertical-align: middle;
-  margin-right: 4px;
-  cursor: pointer;
-  position: relative;
-  flex-shrink: 0;
-}
-
-.md-checkbox.checked {
-  background: var(--bullet);
-}
-
-.md-checkbox.checked::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 3px;
-  width: 4px;
-  height: 7px;
-  border: solid white;
-  border-width: 0 2px 2px 0;
-  transform: rotate(45deg);
-}
 
 /* --- Backlinks --- */
 

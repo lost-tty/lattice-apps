@@ -18,7 +18,7 @@ import {
   blockKind, canAcceptChildren, isCollapsed, blockToMarkdown, markdownToBlock,
   createTable, insertTableRow, insertTableCol, reorderTableRow, reorderTableCol, deleteTableRow, deleteTableCol,
   parseMarkdownToItems, insertBlocksAfter, exportPage,
-  renderContent, parseHeading, parseAnnotations, parseTodoStatus, cycleTodoStatus, toggleCheckbox, isTableRow, isTableSeparator, parseTableCells, getTableGrid,
+  renderContent, parseHeading, parseAnnotations, parseTodoStatus, cycleTodoStatus, isTableRow, isTableSeparator, parseTableCells, getTableGrid,
   getBacklinks, pageTitle, navigateTo, navigateById,
   isJournalPage, getJournalPages,
   beginUndo, commitUndo, undo, redo, canUndo, canRedo,
@@ -371,12 +371,6 @@ function BlockItem({ node }: { node: FlatBlock }) {
     }
     if (target.classList.contains('hyperlink')) {
       e.stopPropagation();
-      return;
-    }
-    if (target.classList.contains('md-checkbox')) {
-      e.stopPropagation();
-      const current = blockData.value[node.id];
-      if (current) saveBlock({ ...current, content: toggleCheckbox(current.content) });
       return;
     }
     if (target.classList.contains('todo-marker')) {

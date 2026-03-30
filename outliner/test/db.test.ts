@@ -11,7 +11,7 @@ import {
   fixHeadingSections,
   exportPage, exportAllPages, importPage, importAllPages,
   hasChildren, toggleCollapse, isCollapsed, collapsedBlocks, moveBlock, validateTree,
-  parseWikiLinks, renderContent, isTableRow, isTableSeparator, parseTableCells, parseHeading, parseTodoStatus, cycleTodoStatus, toggleCheckbox,
+  parseWikiLinks, renderContent, isTableRow, isTableSeparator, parseTableCells, parseHeading, parseTodoStatus, cycleTodoStatus,
   getTableGrid, createTable, insertTableRow, insertTableCol, reorderTableRow, reorderTableCol, deleteTableRow, deleteTableCol,
   getBacklinks,
   navigateTo, navigateById, findPageBySlug, currentPage, activeBlockId,
@@ -1186,32 +1186,24 @@ describe('renderContent', () => {
     expect(html).toContain('class="wiki-link"');
   });
 
-  it('renders unchecked markdown checkbox', () => {
-    const html = renderContent('[ ] buy milk');
-    expect(html).toContain('class="md-checkbox"');
-    expect(html).not.toContain('checked');
-    expect(html).toContain('buy milk');
+  it('parseTodoStatus detects unchecked checkbox', () => {
+    expect(parseTodoStatus('[ ] buy milk')).toEqual({ status: 'todo', text: 'buy milk' });
   });
 
-  it('renders checked markdown checkbox', () => {
-    const html = renderContent('[x] buy milk');
-    expect(html).toContain('class="md-checkbox checked"');
-    expect(html).toContain('buy milk');
+  it('parseTodoStatus detects checked checkbox', () => {
+    expect(parseTodoStatus('[x] buy milk')).toEqual({ status: 'done', text: 'buy milk' });
   });
 
-  it('renders checked markdown checkbox with uppercase X', () => {
-    const html = renderContent('[X] buy milk');
-    expect(html).toContain('class="md-checkbox checked"');
+  it('parseTodoStatus detects uppercase X checkbox', () => {
+    expect(parseTodoStatus('[X] buy milk')).toEqual({ status: 'done', text: 'buy milk' });
   });
 
-  it('does not render checkbox mid-line', () => {
-    const html = renderContent('text [ ] not a checkbox');
-    expect(html).not.toContain('md-checkbox');
+  it('cycleTodoStatus cycles checkbox to DOING', () => {
+    expect(cycleTodoStatus('[ ] buy milk')).toBe('DOING buy milk');
   });
 
-  it('does not render checkbox with leading hyphen (blocks already have a bullet)', () => {
-    const html = renderContent('- [ ] buy milk');
-    expect(html).not.toContain('md-checkbox');
+  it('cycleTodoStatus cycles checked checkbox to CANCELLED', () => {
+    expect(cycleTodoStatus('[x] buy milk')).toBe('CANCELLED buy milk');
   });
 });
 
@@ -1451,25 +1443,6 @@ describe('table import/export', () => {
     expect(md).toContain('| Alice | 30 |');
   });
 });
-
-describe('toggleCheckbox', () => {
-  it('toggles unchecked to checked', () => {
-    expect(toggleCheckbox('[ ] buy milk')).toBe('[x] buy milk');
-  });
-
-  it('toggles checked to unchecked', () => {
-    expect(toggleCheckbox('[x] buy milk')).toBe('[ ] buy milk');
-  });
-
-  it('handles uppercase X', () => {
-    expect(toggleCheckbox('[X] buy milk')).toBe('[ ] buy milk');
-  });
-
-  it('does nothing for non-checkbox content', () => {
-    expect(toggleCheckbox('plain text')).toBe('plain text');
-  });
-});
-
 
 
 describe('parseHeading', () => {
