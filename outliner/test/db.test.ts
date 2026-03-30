@@ -1206,23 +1206,27 @@ describe('renderContent', () => {
   });
 
   it('parseTodoStatus detects unchecked checkbox', () => {
-    expect(parseTodoStatus('[ ] buy milk')).toEqual({ status: 'todo', text: 'buy milk' });
+    expect(parseTodoStatus('[ ] buy milk')).toEqual({ status: 'todo', syntax: 'checkbox', text: 'buy milk' });
   });
 
   it('parseTodoStatus detects checked checkbox', () => {
-    expect(parseTodoStatus('[x] buy milk')).toEqual({ status: 'done', text: 'buy milk' });
+    expect(parseTodoStatus('[x] buy milk')).toEqual({ status: 'done', syntax: 'checkbox', text: 'buy milk' });
   });
 
   it('parseTodoStatus detects uppercase X checkbox', () => {
-    expect(parseTodoStatus('[X] buy milk')).toEqual({ status: 'done', text: 'buy milk' });
+    expect(parseTodoStatus('[X] buy milk')).toEqual({ status: 'done', syntax: 'checkbox', text: 'buy milk' });
   });
 
-  it('cycleTodoStatus cycles checkbox to DOING', () => {
-    expect(cycleTodoStatus('[ ] buy milk')).toBe('DOING buy milk');
+  it('cycleTodoStatus toggles unchecked checkbox to checked', () => {
+    expect(cycleTodoStatus('[ ] buy milk')).toBe('[x] buy milk');
   });
 
-  it('cycleTodoStatus cycles checked checkbox to CANCELLED', () => {
-    expect(cycleTodoStatus('[x] buy milk')).toBe('CANCELLED buy milk');
+  it('cycleTodoStatus toggles checked checkbox to unchecked', () => {
+    expect(cycleTodoStatus('[x] buy milk')).toBe('[ ] buy milk');
+  });
+
+  it('cycleTodoStatus toggles uppercase X checkbox to unchecked', () => {
+    expect(cycleTodoStatus('[X] buy milk')).toBe('[ ] buy milk');
   });
 });
 
@@ -1486,35 +1490,35 @@ describe('parseHeading', () => {
 
 describe('parseTodoStatus', () => {
   it('parses TODO prefix', () => {
-    expect(parseTodoStatus('TODO buy milk')).toEqual({ status: 'todo', text: 'buy milk' });
+    expect(parseTodoStatus('TODO buy milk')).toEqual({ status: 'todo', syntax: 'keyword', text: 'buy milk' });
   });
 
   it('parses DOING prefix', () => {
-    expect(parseTodoStatus('DOING write code')).toEqual({ status: 'doing', text: 'write code' });
+    expect(parseTodoStatus('DOING write code')).toEqual({ status: 'doing', syntax: 'keyword', text: 'write code' });
   });
 
   it('parses DONE prefix', () => {
-    expect(parseTodoStatus('DONE ship it')).toEqual({ status: 'done', text: 'ship it' });
+    expect(parseTodoStatus('DONE ship it')).toEqual({ status: 'done', syntax: 'keyword', text: 'ship it' });
   });
 
   it('parses NOW as doing', () => {
-    expect(parseTodoStatus('NOW urgent task')).toEqual({ status: 'doing', text: 'urgent task' });
+    expect(parseTodoStatus('NOW urgent task')).toEqual({ status: 'doing', syntax: 'keyword', text: 'urgent task' });
   });
 
   it('parses LATER prefix', () => {
-    expect(parseTodoStatus('LATER someday')).toEqual({ status: 'later', text: 'someday' });
+    expect(parseTodoStatus('LATER someday')).toEqual({ status: 'later', syntax: 'keyword', text: 'someday' });
   });
 
   it('parses WAIT prefix', () => {
-    expect(parseTodoStatus('WAIT on review')).toEqual({ status: 'wait', text: 'on review' });
+    expect(parseTodoStatus('WAIT on review')).toEqual({ status: 'wait', syntax: 'keyword', text: 'on review' });
   });
 
   it('parses CANCELLED prefix', () => {
-    expect(parseTodoStatus('CANCELLED old idea')).toEqual({ status: 'cancelled', text: 'old idea' });
+    expect(parseTodoStatus('CANCELLED old idea')).toEqual({ status: 'cancelled', syntax: 'keyword', text: 'old idea' });
   });
 
   it('returns null for no prefix', () => {
-    expect(parseTodoStatus('regular text')).toEqual({ status: null, text: 'regular text' });
+    expect(parseTodoStatus('regular text')).toEqual({ status: null, syntax: null, text: 'regular text' });
   });
 });
 
@@ -1535,8 +1539,8 @@ describe('cycleTodoStatus', () => {
     expect(cycleTodoStatus('DONE buy milk')).toBe('CANCELLED buy milk');
   });
 
-  it('cycles CANCELLED → none', () => {
-    expect(cycleTodoStatus('CANCELLED buy milk')).toBe('buy milk');
+  it('cycles CANCELLED → TODO', () => {
+    expect(cycleTodoStatus('CANCELLED buy milk')).toBe('TODO buy milk');
   });
 
   it('cycles LATER → DOING', () => {
@@ -1549,6 +1553,39 @@ describe('cycleTodoStatus', () => {
 
   it('cycles NOW → DONE (via doing normalisation)', () => {
     expect(cycleTodoStatus('NOW urgent')).toBe('DONE urgent');
+  });
+
+  it('full keyword cycle stays in keyword syntax', () => {
+    let content = 'buy milk';
+    content = cycleTodoStatus(content); expect(content).toBe('TODO buy milk');
+    content = cycleTodoStatus(content); expect(content).toBe('DOING buy milk');
+    content = cycleTodoStatus(content); expect(content).toBe('DONE buy milk');
+    content = cycleTodoStatus(content); expect(content).toBe('CANCELLED buy milk');
+    content = cycleTodoStatus(content); expect(content).toBe('TODO buy milk');
+  });
+
+  it('full checkbox cycle stays in checkbox syntax', () => {
+    let content = '[ ] buy milk';
+    content = cycleTodoStatus(content); expect(content).toBe('[x] buy milk');
+    content = cycleTodoStatus(content); expect(content).toBe('[ ] buy milk');
+    content = cycleTodoStatus(content); expect(content).toBe('[x] buy milk');
+    // never produces keyword syntax
+  });
+
+  it('checkbox cycle never produces keyword syntax', () => {
+    const steps = ['[ ] task', '[x] task'];
+    for (const start of steps) {
+      const result = cycleTodoStatus(start);
+      expect(parseTodoStatus(result).syntax).toBe('checkbox');
+    }
+  });
+
+  it('keyword cycle never produces checkbox syntax', () => {
+    const steps = ['task', 'TODO task', 'DOING task', 'DONE task', 'CANCELLED task'];
+    for (const start of steps) {
+      const result = cycleTodoStatus(start);
+      expect(parseTodoStatus(result).syntax).not.toBe('checkbox');
+    }
   });
 });
 

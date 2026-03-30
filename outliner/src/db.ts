@@ -1600,28 +1600,31 @@ export function parseAnnotations(text: string): { text: string; kanban: boolean;
 const TODO_KEYWORDS = ['TODO', 'DOING', 'NOW', 'LATER', 'WAIT', 'DONE', 'CANCELLED'];
 const TODO_REGEX = new RegExp(`^(${TODO_KEYWORDS.join('|')}) `);
 
-export function parseTodoStatus(content: string): { status: string | null; text: string } {
+export function parseTodoStatus(content: string): { status: string | null; syntax: 'checkbox' | 'keyword' | null; text: string } {
   const kw = content.match(TODO_REGEX);
   if (kw) {
     const raw = kw[1].toLowerCase();
-    return { status: raw === 'now' ? 'doing' : raw, text: content.slice(kw[0].length) };
+    return { status: raw === 'now' ? 'doing' : raw, syntax: 'keyword', text: content.slice(kw[0].length) };
   }
-  if (/^\[ \] /.test(content)) return { status: 'todo', text: content.slice(4) };
-  if (/^\[[xX]\] /.test(content)) return { status: 'done', text: content.slice(4) };
-  return { status: null, text: content };
+  if (/^\[ \] /.test(content)) return { status: 'todo', syntax: 'checkbox', text: content.slice(4) };
+  if (/^\[[xX]\] /.test(content)) return { status: 'done', syntax: 'checkbox', text: content.slice(4) };
+  return { status: null, syntax: null, text: content };
 }
 
-/** Cycle task status: none → TODO → DOING → DONE → CANCELLED → none.
- *  Checkbox prefixes are converted to keyword prefixes on cycle. */
+/** Cycle task status.
+ *  Checkbox syntax stays as checkboxes: [ ] ↔ [x].
+ *  Keyword syntax cycles: none → TODO → DOING → DONE → CANCELLED → none. */
 export function cycleTodoStatus(content: string): string {
-  const { status, text } = parseTodoStatus(content);
+  const { status, syntax, text } = parseTodoStatus(content);
+  if (syntax === 'checkbox') {
+    return status === 'done' ? `[ ] ${text}` : `[x] ${text}`;
+  }
   const next: Record<string, string> = {
-    todo: 'DOING', doing: 'DONE', done: 'CANCELLED', cancelled: '',
+    todo: 'DOING', doing: 'DONE', done: 'CANCELLED', cancelled: 'TODO',
     later: 'DOING', wait: 'DOING',
   };
   if (!status) return `TODO ${content}`;
-  const prefix = next[status] ?? '';
-  return prefix ? `${prefix} ${text}` : text;
+  return `${next[status] ?? 'TODO'} ${text}`;
 }
 
 /** Find all blocks on other pages that reference this page by wiki link or #tag.

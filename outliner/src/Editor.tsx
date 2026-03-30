@@ -125,9 +125,9 @@ function startBlockDrag(e: DragEvent, blockId: string) {
 /** Return the content template for a new sibling of this block.
  *  Checkboxes continue unchecked, todo keywords carry over, etc. */
 function continuationContent(block: Block): string {
-  const { status } = parseTodoStatus(block.content);
+  const { status, syntax } = parseTodoStatus(block.content);
+  if (syntax === 'checkbox') return '[ ] ';
   if (status) return status === 'done' || status === 'cancelled' ? '' : `${status.toUpperCase()} `;
-  if (block.content.match(/^\[[ xX]\] /)) return '[ ] ';
   return '';
 }
 
