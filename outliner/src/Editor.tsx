@@ -232,19 +232,6 @@ function BlockItem({ node }: { node: FlatBlock }) {
         return;
       }
 
-      if (after === '') {
-        // Cursor at end — check if there's a next sibling
-        const flat = flattenTree(buildTree(node.pageId));
-        const idx = flat.findIndex(b => b.id === node.id);
-        if (idx < flat.length - 1) {
-          // Next block exists — just save and move to it
-          saveBlock({ ...node, content: before, type: parsedType });
-          commitUndo();
-          activateBlock(flat[idx + 1].id, 'end');
-          return;
-        }
-      }
-
       const newContent = after || continuationContent(node);
       const newId = createBlockAfter(node.id, newContent, parsedType);
       commitUndo();
