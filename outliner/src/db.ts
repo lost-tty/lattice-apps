@@ -1577,6 +1577,17 @@ export function parseHeading(content: string): { level: number | null; text: str
   return { level: m[1].length, text: m[2] };
 }
 
+/** Strip block annotations like [.kanban] and [.hl-N] from text. */
+export function parseAnnotations(text: string): { text: string; kanban: boolean; hl: number | null } {
+  let kanban = false;
+  let hl: number | null = null;
+  const cleaned = text
+    .replace(/\[\.kanban\]/g, () => { kanban = true; return ''; })
+    .replace(/\[\.hl-(\d+)\]/g, (_, n) => { hl = parseInt(n); return ''; })
+    .trim();
+  return { text: cleaned, kanban, hl };
+}
+
 /** Extract TODO/DOING/DONE status from block content prefix. */
 const TODO_KEYWORDS = ['TODO', 'DOING', 'NOW', 'LATER', 'WAIT', 'DONE', 'CANCELLED'];
 const TODO_REGEX = new RegExp(`^(${TODO_KEYWORDS.join('|')}) `);

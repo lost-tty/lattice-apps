@@ -17,6 +17,7 @@ import {
   navigateTo, navigateById, findPageBySlug, currentPage, activeBlockId,
   isJournalSlug, formatJournalTitle, pageTitle, pageList, isTentativePage,
   beginUndo, commitUndo, undo, redo,
+  parseAnnotations,
 } from '../src/db';
 
 const encode = (s: string) => new TextEncoder().encode(s);
@@ -1065,6 +1066,13 @@ describe('renderContent', () => {
 
   it('renders strikethrough', () => {
     expect(renderContent('~~deleted~~')).toContain('<s>deleted</s>');
+  });
+
+  it('parseAnnotations strips [.kanban] and [.hl-N]', () => {
+    expect(parseAnnotations('Tasks [.kanban]')).toEqual({ text: 'Tasks', kanban: true, hl: null });
+    expect(parseAnnotations('Backlog [.hl-4]')).toEqual({ text: 'Backlog', kanban: false, hl: 4 });
+    expect(parseAnnotations('Board [.kanban] [.hl-2]')).toEqual({ text: 'Board', kanban: true, hl: 2 });
+    expect(parseAnnotations('No annotations')).toEqual({ text: 'No annotations', kanban: false, hl: null });
   });
 
   it('renders highlight', () => {
