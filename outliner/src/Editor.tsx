@@ -7,6 +7,7 @@
 // the contentEditable mounted and focused.
 
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'preact/hooks';
+import { Content } from './renderContent';
 import type { FlatBlock } from './db';
 import type { Block } from './types';
 import { IconCopy, IconDownload, IconCode, IconTree, IconUndo, IconRedo } from './Icons';
@@ -18,7 +19,7 @@ import {
   blockKind, canAcceptChildren, isCollapsed, blockToMarkdown, markdownToBlock,
   createTable, insertTableRow, insertTableCol, reorderTableRow, reorderTableCol, deleteTableRow, deleteTableCol,
   parseMarkdownToItems, insertBlocksAfter, exportPage,
-  renderContent, parseHeading, parseAnnotations, parseTodoStatus, cycleTodoStatus, isTableRow, isTableSeparator, parseTableCells, getTableGrid,
+  parseHeading, parseAnnotations, parseTodoStatus, cycleTodoStatus, isTableRow, isTableSeparator, parseTableCells, getTableGrid,
   getBacklinks, pageTitle, navigateTo, navigateById,
   isJournalPage, getJournalPages,
   beginUndo, commitUndo, undo, redo, canUndo, canRedo,
@@ -153,24 +154,7 @@ function BlockItem({ node }: { node: FlatBlock }) {
     setCursor(el, activation?.cursor ?? 'end', prefixLen);
   }, [isActive]);
 
-  // View mode: render formatted HTML.
-  const collapsed = hasKids && isCollapsed(node.id);
-  useLayoutEffect(() => {
-    if (isActive || !ref.current) return;
-    const { status, text: statusText } = parseTodoStatus(node.content);
-    const { level, text: headingText } = parseHeading(statusText);
-    const { text } = level ? parseAnnotations(headingText) : { text: headingText };
-    const bullet = isPara ? '' : '<span class="bullet-marker"></span>';
-    const marker = status ? `<span class="todo-marker ${status}"></span>` : '';
-    ref.current.innerHTML = bullet + marker + `<span>${renderContent(text) || '<br>'}</span>`;
-    if (collapsed) {
-      const el = document.createElement('span');
-      el.className = 'collapsed-ellipsis';
-      el.textContent = '…';
-      el.onclick = (e) => { e.stopPropagation(); toggleCollapse(node.id); };
-      ref.current.appendChild(el);
-    }
-  }, [isActive, node.content, collapsed]);
+
 
   /** Parse editor text back to block fields and save. */
   function saveFromEditor() {
@@ -447,8 +431,10 @@ function BlockItem({ node }: { node: FlatBlock }) {
   // --- Render ---
 
   const isPara = node.type === 'paragraph';
-  const { status } = parseTodoStatus(node.content);
-  const { level } = parseHeading(node.content);
+  const collapsed = hasKids && isCollapsed(node.id);
+  const { status, text: statusText } = parseTodoStatus(node.content);
+  const { level, text: headingText } = parseHeading(statusText);
+  const viewText = level ? parseAnnotations(headingText).text : headingText;
   const contentClass = [
     'block-content',
     isActive ? 'editing' : '',
@@ -476,16 +462,25 @@ function BlockItem({ node }: { node: FlatBlock }) {
       />
       {isHr && !isActive ? (
         <hr onClick={handleClick} />
-      ) : (
+      ) : isActive ? (
         <div
           ref={ref}
           class={contentClass}
-          contentEditable={isActive}
+          contentEditable
           onKeyDown={handleKeyDown}
           onBlur={handleBlur}
           onClick={handleClick}
           onPaste={(e: Event) => handlePaste(e as ClipboardEvent)}
         />
+      ) : (
+        <div class={contentClass} onClick={handleClick}>
+          {!isPara && <span class="bullet-marker" />}
+          {status && <span class={`todo-marker ${status}`} />}
+          <span><Content text={viewText} fallback={<br />} /></span>
+          {collapsed && (
+            <span class="collapsed-ellipsis" onClick={(e: Event) => { e.stopPropagation(); toggleCollapse(node.id); }}>…</span>
+          )}
+        </div>
       )}
     </div>
   );
@@ -709,7 +704,7 @@ function TableBlock({ node }: { node: FlatBlock }) {
                 {activeBlockId.value === cell.id ? (
                   <CellEditor cell={cell} />
                 ) : (
-                  <span dangerouslySetInnerHTML={{ __html: renderContent(cell.content) || '&nbsp;' }} />
+                  <span><Content text={cell.content} fallback="&nbsp;" /></span>
                 )}
               </div>
             );
@@ -827,6 +822,9 @@ function KanbanCard({ blockId }: { blockId: string }) {
   const isActive = activeBlockId.value === blockId;
   const ref = useRef<HTMLDivElement>(null);
 
+  const { status, text: statusText } = parseTodoStatus(block.content);
+  const { text: viewText } = parseHeading(statusText);
+
   useLayoutEffect(() => {
     if (!isActive || !ref.current) return;
     const el = ref.current;
@@ -836,14 +834,6 @@ function KanbanCard({ blockId }: { blockId: string }) {
     el.focus();
     setCursor(el, activation?.cursor ?? 'end', 0);
   }, [isActive]);
-
-  useLayoutEffect(() => {
-    if (isActive || !ref.current) return;
-    const { status, text: statusText } = parseTodoStatus(block.content);
-    const { text } = parseHeading(statusText);
-    const marker = status ? `<span class="todo-marker ${status}"></span>` : '';
-    ref.current.innerHTML = marker + `<span>${renderContent(text) || '<br>'}</span>`;
-  }, [isActive, block.content]);
 
   function saveFromEditor() {
     const content = ref.current?.textContent || '';
@@ -891,33 +881,42 @@ function KanbanCard({ blockId }: { blockId: string }) {
         dragBlockId = null;
       }}
     >
-      <div
-        ref={ref}
-        class="kanban-card-content"
-        contentEditable={isActive}
-        onClick={() => { if (!isActive) activeBlockId.value = blockId; }}
-        onBlur={() => {
-          if (activeBlockId.value === blockId) {
-            saveFromEditor();
-            activeBlockId.value = null;
-          }
-        }}
-        onKeyDown={(e: Event) => {
-          const ke = e as KeyboardEvent;
-          if (ke.key === 'Escape' || ke.key === 'Enter') {
-            ke.preventDefault();
-            saveFromEditor();
-            activeBlockId.value = null;
-          }
-          if (ke.key === 'Backspace' && (ref.current?.textContent || '') === '') {
-            ke.preventDefault();
-            beginUndo('delete card');
-            void deleteBlock(blockId);
-            commitUndo();
-            activeBlockId.value = null;
-          }
-        }}
-      />
+      {isActive ? (
+        <div
+          ref={ref}
+          class="kanban-card-content"
+          contentEditable
+          onBlur={() => {
+            if (activeBlockId.value === blockId) {
+              saveFromEditor();
+              activeBlockId.value = null;
+            }
+          }}
+          onKeyDown={(e: Event) => {
+            const ke = e as KeyboardEvent;
+            if (ke.key === 'Escape' || ke.key === 'Enter') {
+              ke.preventDefault();
+              saveFromEditor();
+              activeBlockId.value = null;
+            }
+            if (ke.key === 'Backspace' && (ref.current?.textContent || '') === '') {
+              ke.preventDefault();
+              beginUndo('delete card');
+              void deleteBlock(blockId);
+              commitUndo();
+              activeBlockId.value = null;
+            }
+          }}
+        />
+      ) : (
+        <div
+          class="kanban-card-content"
+          onClick={() => { activeBlockId.value = blockId; }}
+        >
+          {status && <span class={`todo-marker ${status}`} />}
+          <span><Content text={viewText} fallback={<br />} /></span>
+        </div>
+      )}
     </div>
   );
 }
@@ -1389,10 +1388,7 @@ function BacklinksPanel({ backlinks }: { backlinks: { block: Block; children: Fl
       {backlinks.map(({ block, children }) => (
         <div key={block.id} class="backlink" onClick={() => navigateById(block.pageId)}>
           <span class="backlink-page">{pageTitle(block.pageId)}</span>
-          <span
-            class="backlink-content"
-            dangerouslySetInnerHTML={{ __html: renderContent(block.content) }}
-          />
+          <span class="backlink-content"><Content text={block.content} /></span>
           {children.length > 0 && (
             <div class="backlink-children">
               {children.map(child => (
@@ -1400,8 +1396,9 @@ function BacklinksPanel({ backlinks }: { backlinks: { block: Block; children: Fl
                   key={child.id}
                   class="backlink-child"
                   style={`padding-left: ${child.depth * 1}rem`}
-                  dangerouslySetInnerHTML={{ __html: renderContent(child.content) }}
-                />
+                >
+                  <Content text={child.content} />
+                </div>
               ))}
             </div>
           )}

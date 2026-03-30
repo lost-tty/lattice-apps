@@ -7,7 +7,6 @@
 
 import { signal, computed } from '@preact/signals';
 import type { Store, Page, Block, BlockNode, WatchEvent } from './types';
-import temml from 'temml';
 // --- Encoding ---
 
 const encode = (s: string) => new TextEncoder().encode(s);
@@ -1521,56 +1520,7 @@ export function parseTableCells(text: string): string[] | null {
   return text.trim().slice(1, -1).split('|').map(c => c.trim());
 }
 
-/** Render block content to HTML with markdown, wiki links, and tags. */
-function renderMath(tex: string, displayMode: boolean): string {
-  try {
-    return temml.renderToString(tex, { displayMode });
-  } catch { return `<code class="math-error">${tex}</code>`; }
-}
 
-export function renderContent(text: string): string {
-  let html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-  // Extract code spans and math first (protect from formatting)
-  const slots: string[] = [];
-  // Display math $$...$$ (must come before inline $...$)
-  html = html.replace(/\$\$(.+?)\$\$/g, (_, tex) => {
-    slots.push(renderMath(tex, true));
-    return `\x00S${slots.length - 1}\x00`;
-  });
-  // Inline math $...$
-  html = html.replace(/\$(.+?)\$/g, (_, tex) => {
-    slots.push(renderMath(tex, false));
-    return `\x00S${slots.length - 1}\x00`;
-  });
-  // Code spans
-  html = html.replace(/`([^`]+)`/g, (_, code) => {
-    slots.push(`<code>${code}</code>`);
-    return `\x00S${slots.length - 1}\x00`;
-  });
-
-  html = html.replace(/(^|\s)#\[\[([^\]]+)\]\]/g, '$1<span class="tag" data-page="$2">#$2</span>');
-  html = html.replace(/\[\[([^\]]+)\]\]/g, '<span class="wiki-link" data-page="$1">$1</span>');
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a class="hyperlink" href="$2" target="_blank" rel="noopener">$1</a>');
-  html = html.replace(/(^|\s)#(\w[\w\-/]*)(?=\s|$)/g, '$1<span class="tag" data-page="$2">#$2</span>');
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  html = html.replace(/~~(.+?)~~/g, '<s>$1</s>');
-  html = html.replace(/==(.+?)==(?:\[\.hl-(\d+)\])?/g, (_, text, n) =>
-    n ? `<mark class="hl-${n}">${text}</mark>` : `<mark>${text}</mark>`,
-  );
-
-  // Protect existing <a> and <span> tags from bare-URL matching, then auto-link bare URLs.
-  const tags: string[] = [];
-  html = html.replace(/<[^>]+>/g, (tag) => { tags.push(tag); return `\x00T${tags.length - 1}\x00`; });
-  html = html.replace(/(^|[\s(])(https?:\/\/[^\s)<]+)/g, '$1<a class="hyperlink" href="$2" target="_blank" rel="noopener">$2</a>');
-  html = html.replace(/\x00T(\d+)\x00/g, (_, i) => tags[parseInt(i)]);
-
-  // Restore protected slots (math + code)
-  html = html.replace(/\x00S(\d+)\x00/g, (_, i) => slots[parseInt(i)]);
-
-  return html;
-}
 
 
 

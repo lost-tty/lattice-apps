@@ -11,7 +11,7 @@ import {
   fixHeadingSections,
   exportPage, exportAllPages, importPage, importAllPages,
   hasChildren, toggleCollapse, isCollapsed, collapsedBlocks, moveBlock, validateTree,
-  parseWikiLinks, renderContent, isTableRow, isTableSeparator, parseTableCells, parseHeading, parseTodoStatus, cycleTodoStatus,
+  parseWikiLinks, isTableRow, isTableSeparator, parseTableCells, parseHeading, parseTodoStatus, cycleTodoStatus,
   getTableGrid, createTable, insertTableRow, insertTableCol, reorderTableRow, reorderTableCol, deleteTableRow, deleteTableCol,
   getBacklinks,
   navigateTo, navigateById, findPageBySlug, currentPage, activeBlockId,
@@ -1011,200 +1011,16 @@ describe('parseWikiLinks', () => {
   });
 });
 
-// Simulates what BlockItem does when rendering an inactive block:
-// parseTodoStatus strips the prefix, then renderContent formats the text.
-// Verifies the text appears exactly once (guards against double-render bugs).
-describe('block display pipeline', () => {
-  it('plain text appears exactly once in rendered output', () => {
-    const content = 'Hello world';
-    const { status, text } = parseTodoStatus(content);
-    const html = renderContent(text) || '<br>';
-    expect(status).toBeNull();
-    expect((html.match(/Hello world/g) ?? []).length).toBe(1);
-  });
-
-  it('TODO prefix is stripped and body appears exactly once', () => {
-    const content = 'TODO buy milk';
-    const { status, text } = parseTodoStatus(content);
-    const html = renderContent(text) || '<br>';
-    expect(status).toBe('todo');
-    expect(html).not.toContain('TODO');
-    expect((html.match(/buy milk/g) ?? []).length).toBe(1);
-  });
-
-  it('wiki link text appears exactly once as visible content', () => {
-    const content = 'see [[Research]]';
-    const { text } = parseTodoStatus(content);
-    const html = renderContent(text);
-    // The page name also appears in data-page="Research" — that's by design.
-    // Check that it appears exactly once as visible text (between tags).
-    expect((html.match(/>Research</g) ?? []).length).toBe(1);
-  });
-});
-
-describe('renderContent', () => {
-  it('renders wiki links', () => {
-    const html = renderContent('see [[Foo]]');
-    expect(html).toContain('class="wiki-link"');
-    expect(html).toContain('data-page="Foo"');
-    expect(html).toContain('>Foo<');
-  });
-
-  it('renders bold', () => {
-    expect(renderContent('**bold**')).toContain('<strong>bold</strong>');
-  });
-
-  it('renders italic', () => {
-    expect(renderContent('*italic*')).toContain('<em>italic</em>');
-  });
-
-  it('renders code without inner formatting', () => {
-    const html = renderContent('`**not bold**`');
-    expect(html).toContain('<code>**not bold**</code>');
-    expect(html).not.toContain('<strong>');
-  });
-
-  it('renders strikethrough', () => {
-    expect(renderContent('~~deleted~~')).toContain('<s>deleted</s>');
-  });
-
-  it('parseAnnotations strips [.kanban] and [.hl-N]', () => {
+describe('parseAnnotations', () => {
+  it('strips [.kanban] and [.hl-N]', () => {
     expect(parseAnnotations('Tasks [.kanban]')).toEqual({ text: 'Tasks', kanban: true, hl: null });
     expect(parseAnnotations('Backlog [.hl-4]')).toEqual({ text: 'Backlog', kanban: false, hl: 4 });
     expect(parseAnnotations('Board [.kanban] [.hl-2]')).toEqual({ text: 'Board', kanban: true, hl: 2 });
     expect(parseAnnotations('No annotations')).toEqual({ text: 'No annotations', kanban: false, hl: null });
   });
+});
 
-  it('renders inline math $...$', () => {
-    const html = renderContent('Energy is $E=mc^2$ right?');
-    expect(html).toContain('<math>');
-    expect(html).toContain('Energy is');
-    expect(html).toContain('right?');
-  });
-
-  it('renders display math $$...$$', () => {
-    const html = renderContent('$$\\frac{a}{b}$$');
-    expect(html).toContain('<math');
-    expect(html).toContain('display="block"');
-  });
-
-  it('does not render math inside code spans', () => {
-    const html = renderContent('`$x^2$`');
-    expect(html).toContain('<code>');
-    expect(html).not.toContain('<math>');
-  });
-
-  it('renders highlight', () => {
-    expect(renderContent('==important==')).toContain('<mark>important</mark>');
-  });
-
-  it('renders colored highlight', () => {
-    expect(renderContent('==text==[.hl-3]')).toContain('<mark class="hl-3">text</mark>');
-  });
-
-  it('renders colored highlight without affecting surrounding text', () => {
-    const html = renderContent('before ==text==[.hl-1] after');
-    expect(html).toContain('before ');
-    expect(html).toContain('<mark class="hl-1">text</mark>');
-    expect(html).toContain(' after');
-  });
-
-  it('renders hyperlinks', () => {
-    const html = renderContent('see [Docs](https://example.com)');
-    expect(html).toContain('class="hyperlink"');
-    expect(html).toContain('href="https://example.com"');
-    expect(html).toContain('>Docs<');
-    expect(html).toContain('target="_blank"');
-  });
-
-  it('auto-links bare URLs', () => {
-    const html = renderContent('visit https://example.com for info');
-    expect(html).toContain('href="https://example.com"');
-    expect(html).toContain('>https://example.com<');
-  });
-
-  it('does not double-link URLs inside [text](url) syntax', () => {
-    const html = renderContent('[click here](https://example.com)');
-    // Should produce exactly one <a> tag, not nested
-    const count = (html.match(/<a /g) ?? []).length;
-    expect(count).toBe(1);
-    expect(html).toContain('>click here<');
-  });
-
-  it('does not double-link when URL is the link text', () => {
-    const html = renderContent('[https://example.com](https://example.com)');
-    const count = (html.match(/<a /g) ?? []).length;
-    expect(count).toBe(1);
-    expect(html).toContain('>https://example.com<');
-  });
-
-  it('does not confuse wiki links with hyperlinks', () => {
-    const html = renderContent('[[Page]] and [link](http://x.com)');
-    expect(html).toContain('class="wiki-link"');
-    expect(html).toContain('class="hyperlink"');
-    expect(html).toContain('data-page="Page"');
-    expect(html).toContain('href="http://x.com"');
-  });
-
-  it('renders single-word tags', () => {
-    const html = renderContent('hello #world');
-    expect(html).toContain('class="tag"');
-    expect(html).toContain('data-page="world"');
-  });
-
-  it('renders multi-word tags with #[[...]] syntax', () => {
-    const html = renderContent('tagged #[[my project]]');
-    expect(html).toContain('class="tag"');
-    expect(html).toContain('data-page="my project"');
-    expect(html).toContain('#my project');
-    expect(html).not.toContain('[[');
-  });
-
-  it('renders both tag syntaxes on the same line', () => {
-    const html = renderContent('#simple and #[[multi word]]');
-    const tags = (html.match(/class="tag"/g) ?? []).length;
-    expect(tags).toBe(2);
-  });
-
-  it('does not parse tags when not followed by whitespace or end', () => {
-    const html = renderContent('email user#name or #good tag');
-    const tags = (html.match(/class="tag"/g) ?? []).length;
-    expect(tags).toBe(1);
-    expect(html).toContain('data-page="good"');
-    expect(html).not.toContain('data-page="name"');
-  });
-
-  it('parses tag at end of string', () => {
-    const html = renderContent('end tag #done');
-    expect(html).toContain('class="tag"');
-    expect(html).toContain('data-page="done"');
-  });
-
-  it('parses hierarchical tags with slashes', () => {
-    const html = renderContent('tagged #project/frontend here');
-    expect(html).toContain('class="tag"');
-    expect(html).toContain('data-page="project/frontend"');
-    expect(html).toContain('#project/frontend');
-  });
-
-  it('parses hierarchical tag at end of string', () => {
-    const html = renderContent('see #foo/bar/baz');
-    expect(html).toContain('data-page="foo/bar/baz"');
-  });
-
-  it('escapes HTML', () => {
-    const html = renderContent('<script>alert("xss")</script>');
-    expect(html).not.toContain('<script>');
-    expect(html).toContain('&lt;script&gt;');
-  });
-
-  it('handles mixed formatting', () => {
-    const html = renderContent('**bold** and *italic* with [[link]]');
-    expect(html).toContain('<strong>bold</strong>');
-    expect(html).toContain('<em>italic</em>');
-    expect(html).toContain('class="wiki-link"');
-  });
-
+describe('checkbox parsing', () => {
   it('parseTodoStatus detects unchecked checkbox', () => {
     expect(parseTodoStatus('[ ] buy milk')).toEqual({ status: 'todo', syntax: 'checkbox', text: 'buy milk' });
   });
