@@ -154,10 +154,11 @@ export function savePage(page: Page) {
 
 /** Find or create a page by title. Returns the page ID. */
 export function getOrCreatePage(title: string, folder?: string): string {
-  const existing = Object.values(pageData.value).find(p => p.title === title);
+  const titleLower = title.toLowerCase();
+  const existing = Object.values(pageData.value).find(p => p.title.toLowerCase() === titleLower);
   if (existing) return existing.id;
   const id = crypto.randomUUID();
-  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const slug = titleLower.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const now = new Date().toISOString();
   const resolvedFolder = folder ?? (isJournalSlug(title) ? 'journals' : undefined);
   const page: Page = { id, title, slug, folder: resolvedFolder, createdAt: now, updatedAt: now };
@@ -200,7 +201,8 @@ export function navigateTo(title: string) {
     if (!hasContent) discardTentativePage(prev);
   }
 
-  const existing = Object.values(pageData.value).find(p => p.title === title);
+  const titleLower = title.toLowerCase();
+  const existing = Object.values(pageData.value).find(p => p.title.toLowerCase() === titleLower);
   if (existing) {
     // Page exists (persisted or tentative) — just navigate
     const hasBlocks = Object.values(blockData.value).some(b => b.pageId === existing.id);
@@ -537,13 +539,17 @@ export function canBeSiblingAt(block: Block, pageId: string, parent: string | nu
 export function getBacklinks(pageId: string): { block: Block; children: FlatBlock[] }[] {
   const page = pageData.value[pageId];
   if (!page) return [];
-  const wikiPattern = `[[${page.title}]]`;
-  const multiWordTag = `#[[${page.title}]]`;
+  const titleLower = page.title.toLowerCase();
+  const wikiRe = new RegExp(`\\[\\[${escapeRegex(page.title)}\\]\\]`, 'i');
+  const multiWordTagRe = new RegExp(`#\\[\\[${escapeRegex(page.title)}\\]\\]`, 'i');
+  const simpleTagRe = /^\w[\w\-/]*$/.test(page.title)
+    ? new RegExp(`(^|\\s)#${escapeRegex(page.title)}(?=\\s|$)`, 'i')
+    : null;
   const refBlocks = Object.values(blockData.value)
     .filter(b => b.pageId !== pageId && (
-      b.content.includes(wikiPattern) ||
-      b.content.includes(multiWordTag) ||
-      (/^\w[\w\-/]*$/.test(page.title) && new RegExp(`(^|\\s)#${escapeRegex(page.title)}(?=\\s|$)`).test(b.content))
+      wikiRe.test(b.content) ||
+      multiWordTagRe.test(b.content) ||
+      (simpleTagRe && simpleTagRe.test(b.content))
     ));
   return refBlocks.map(block => {
     const allBlocks = Object.values(blockData.value).filter(b => b.pageId === block.pageId);
