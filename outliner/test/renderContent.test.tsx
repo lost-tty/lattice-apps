@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render } from 'preact';
 import { Content } from '../src/renderContent';
-import { parseTodoStatus } from '../src/db';
+import { parseTodoStatus } from '../src/parse';
 
 let container: HTMLElement;
 
@@ -184,6 +184,19 @@ describe('renderContent', () => {
 
   it('parses hierarchical tag at end of string', () => {
     expect(html('see #foo/bar/baz')).toContain('data-page="foo/bar/baz"');
+  });
+
+  it('renders a tag with trailing non-breaking space as sole block content', () => {
+    // Browsers convert trailing spaces to \u00a0 in contenteditable
+    const out = html('#tag\u00a0');
+    expect(out).toContain('class="tag"');
+    expect(out).toContain('data-page="tag"');
+  });
+
+  it('renders a tag with leading non-breaking space as sole block content', () => {
+    const out = html('\u00a0#tag');
+    expect(out).toContain('class="tag"');
+    expect(out).toContain('data-page="tag"');
   });
 
   it('escapes HTML', () => {

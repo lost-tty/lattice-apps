@@ -5,20 +5,30 @@ import {
   init, reset, pageData, blockData,
   savePage, getOrCreatePage, deletePage,
   saveBlock, deleteBlock,
-  buildTree, flattenTree, getSiblings,
-  createBlockAfter, createChildBlock, indentBlock, outdentBlock, removeBlock, joinBlockWithPrevious,
-  parseMarkdownToItems, insertBlocksAfter,
-  fixHeadingSections,
-  exportPage, exportAllPages, importPage, importAllPages,
-  hasChildren, toggleCollapse, isCollapsed, collapsedBlocks, moveBlock, validateTree,
-  parseWikiLinks, isTableRow, isTableSeparator, parseTableCells, parseHeading, parseTodoStatus, cycleTodoStatus,
-  getTableGrid, createTable, insertTableRow, insertTableCol, reorderTableRow, reorderTableCol, deleteTableRow, deleteTableCol,
+  buildTree, flattenTree, getSiblings, validateTree,
+  hasChildren, toggleCollapse, isCollapsed, collapsedBlocks,
   getBacklinks,
   navigateTo, navigateById, findPageBySlug, currentPage, activeBlockId,
-  isJournalSlug, formatJournalTitle, pageTitle, pageList, isTentativePage,
-  beginUndo, commitUndo, undo, redo,
-  parseAnnotations,
+  pageTitle, pageList, isTentativePage,
 } from '../src/db';
+import { beginUndo, commitUndo, undo, redo } from '../src/undo';
+import {
+  parseWikiLinks, isTableRow, isTableSeparator, parseTableCells, parseHeading,
+  parseTodoStatus, cycleTodoStatus, parseAnnotations,
+  isJournalSlug, formatJournalTitle,
+} from '../src/parse';
+import {
+  createBlockAfter, createChildBlock, indentBlock, outdentBlock,
+  removeBlock, joinBlockWithPrevious, fixHeadingSections, moveBlock,
+} from '../src/blockOps';
+import {
+  getTableGrid, createTable, insertTableRow, insertTableCol,
+  reorderTableRow, reorderTableCol, deleteTableRow, deleteTableCol,
+} from '../src/table';
+import {
+  parseMarkdownToItems, insertBlocksAfter,
+  exportPage, exportAllPages, importPage, importAllPages,
+} from '../src/importExport';
 
 const encode = (s: string) => new TextEncoder().encode(s);
 const decode = (b: Uint8Array) => new TextDecoder().decode(b);

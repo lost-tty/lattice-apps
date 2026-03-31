@@ -7,8 +7,10 @@
 import { useRef, useState } from 'preact/hooks';
 import {
   pageList, currentPage, navigateTo, navigateById, deletePage,
-  todaySlug, pageTitle, exportAllPages, importAllPages, getTagCounts,
+  pageTitle, getTagCounts,
 } from './db';
+import { todaySlug } from './parse';
+import { exportAllPages, importAllPages } from './importExport';
 import { buildTar, parseTar } from './tar';
 import { IconDownload, IconUpload, IconChevronRight, IconChevronDown, IconCalendar, IconFile } from './Icons';
 import type { Page } from './types';

@@ -5,7 +5,8 @@
 import { render } from 'preact';
 import { effect } from '@preact/signals';
 import { App } from './App';
-import { init, navigateTo, navigateById, todaySlug, currentPage, pageData, findPageBySlug } from './db';
+import { init, navigateTo, navigateById, currentPage, pageData, findPageBySlug } from './db';
+import { todaySlug } from './parse';
 
 const root = document.getElementById('app')!;
 

@@ -5,8 +5,10 @@ import { render } from 'preact';
 import { createMockStore } from '../src/mock-sdk';
 import {
   init, reset, getOrCreatePage, saveBlock, blockData,
-  activeBlockId, currentPage, createBlockAfter, joinBlockWithPrevious,
+  activeBlockId, currentPage,
 } from '../src/db';
+import { createBlockAfter, joinBlockWithPrevious } from '../src/blockOps';
+import { continuationContent } from '../src/editorState';
 import { Editor } from '../src/Editor';
 
 function flush(): Promise<void> {
@@ -119,6 +121,35 @@ describe('Editor focus', () => {
     expect(newEditDiv).not.toBeNull();
     expect(newEditDiv.textContent).toBe('-  world');
     expect(document.activeElement).toBe(newEditDiv);
+  });
+});
+
+describe('Continuation template', () => {
+  it('checkbox block generates "- [ ] " template on Enter at end', async () => {
+    const pageId = getOrCreatePage('p');
+    saveBlock({ id: '1', content: '[ ] Item', pageId, parent: null, order: 0 });
+    currentPage.value = pageId;
+    activeBlockId.value = '1';
+
+    render(<Editor />, container);
+    await flush();
+
+    const editDiv = document.querySelector('.block-content.editing') as HTMLElement;
+    expect(editDiv).not.toBeNull();
+    expect(editDiv.textContent).toBe('- [ ] Item');
+
+    // Simulate Enter at end: keep current block, create new with continuation template
+    const node = blockData.value['1'];
+    const newContent = continuationContent(node);
+    const newId = createBlockAfter('1', newContent);
+    activeBlockId.value = newId;
+
+    editDiv.dispatchEvent(new Event('blur'));
+    await flush();
+
+    const newEditDiv = document.querySelector('.block-content.editing') as HTMLElement;
+    expect(newEditDiv).not.toBeNull();
+    expect(newEditDiv.textContent).toBe('- [ ] ');
   });
 });
 

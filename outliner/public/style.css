@@ -483,16 +483,19 @@ body {
   padding: 48px 64px;
 }
 
+.block-tree {
+  display: flex;
+  flex-direction: column;
+  min-height: 25vh;
+}
+
 .block-tree-tail {
-  min-height: 15vh;
+  min-height: 2rem;
+  flex-grow: 1;
   cursor: text;
 }
 
 /* --- Page section (reusable per-page unit) --- */
-
-.page-section {
-  margin-bottom: 32px;
-}
 
 .page-section.with-debug {
   display: flex;
@@ -960,7 +963,6 @@ s {
 /* --- Backlinks --- */
 
 .backlinks {
-  margin-top: 48px;
   padding-top: 24px;
   border-top: 1px solid var(--border);
 }
@@ -1011,7 +1013,6 @@ s {
 
 /* Journal infinite scroll view */
 .journal-view .page-section {
-  padding-bottom: 2rem;
   border-bottom: 1px solid var(--border);
 }
 

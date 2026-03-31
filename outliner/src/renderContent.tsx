@@ -86,7 +86,9 @@ const RULES: Rule[] = [
 
 export function renderContent(text: string): VNode[] {
   const nodes: VNode[] = [];
-  let rest = text;
+  // Normalise non-breaking spaces that contenteditable inserts into regular
+  // spaces so every rule can use plain `[ \t]` character classes.
+  let rest = text.replace(/\u00a0/g, ' ');
   let n = 0;
   const key = () => n++;
 
