@@ -2116,3 +2116,170 @@ describe('undo / redo', () => {
     expect(blockData.value['2'].order).toBeGreaterThan(blockData.value['1'].order);
   });
 });
+
+// --- Batch accumulation ---
+
+describe('batch accumulation', () => {
+  function createSpyStore() {
+    const inner = createMockStore();
+    const calls: { method: string; count?: number }[] = [];
+    const spy: Store & { calls: typeof calls } = {
+      calls,
+      List: (p) => inner.List(p),
+      Get: (p) => inner.Get(p),
+      Put: (p) => { calls.push({ method: 'Put' }); return inner.Put(p); },
+      Delete: (p) => { calls.push({ method: 'Delete' }); return inner.Delete(p); },
+      Batch: (p) => { calls.push({ method: 'Batch', count: p.ops.length }); return inner.Batch(p); },
+      subscribe: (s, p, cb) => inner.subscribe(s, p, cb),
+    };
+    return spy;
+  }
+
+  it('undo group flushes as a single Batch', async () => {
+    reset();
+    const spy = createSpyStore();
+    await init(spy);
+
+    const pageId = getOrCreatePage('test');
+    saveBlock({ id: 'a', content: 'hello', pageId, parent: null, order: 0 });
+    spy.calls.length = 0; // clear setup calls
+
+    beginUndo('split');
+    saveBlock({ ...blockData.value['a'], content: 'hel' });
+    createBlockAfter('a', 'lo');
+    commitUndo();
+
+    // Should be exactly one Batch call, no individual Put/Delete
+    const batches = spy.calls.filter(c => c.method === 'Batch');
+    const puts = spy.calls.filter(c => c.method === 'Put');
+    const deletes = spy.calls.filter(c => c.method === 'Delete');
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0].count).toBeGreaterThanOrEqual(2); // at least 2 block puts
+    expect(puts).toHaveLength(0);
+    expect(deletes).toHaveLength(0);
+  });
+
+  it('operations outside undo group write immediately', async () => {
+    reset();
+    const spy = createSpyStore();
+    await init(spy);
+
+    const pageId = getOrCreatePage('test');
+    spy.calls.length = 0;
+
+    saveBlock({ id: 'x', content: 'direct', pageId, parent: null, order: 0 });
+
+    const puts = spy.calls.filter(c => c.method === 'Put');
+    const batches = spy.calls.filter(c => c.method === 'Batch');
+
+    expect(puts).toHaveLength(1);
+    expect(batches).toHaveLength(0);
+  });
+
+  it('deletePage uses a single Batch when inside undo group', async () => {
+    reset();
+    const spy = createSpyStore();
+    await init(spy);
+
+    const pageId = getOrCreatePage('doomed');
+    saveBlock({ id: 'd1', content: 'a', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'd2', content: 'b', pageId, parent: null, order: 1 });
+    spy.calls.length = 0;
+
+    beginUndo('delete page');
+    deletePage(pageId);
+    commitUndo();
+
+    const batches = spy.calls.filter(c => c.method === 'Batch');
+    const deletes = spy.calls.filter(c => c.method === 'Delete');
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0].count).toBeGreaterThanOrEqual(3); // page + 2 blocks
+    expect(deletes).toHaveLength(0);
+  });
+
+  it('undo flushes as a single Batch', async () => {
+    reset();
+    const spy = createSpyStore();
+    await init(spy);
+
+    const pageId = getOrCreatePage('test');
+    currentPage.value = pageId;
+    saveBlock({ id: 'u1', content: 'hello', pageId, parent: null, order: 0 });
+
+    // Split block via undo group (creates 2 patches)
+    beginUndo('split');
+    saveBlock({ ...blockData.value['u1'], content: 'hel' });
+    createBlockAfter('u1', 'lo');
+    commitUndo();
+
+    spy.calls.length = 0;
+    undo();
+
+    const batches = spy.calls.filter(c => c.method === 'Batch');
+    const puts = spy.calls.filter(c => c.method === 'Put');
+    const deletes = spy.calls.filter(c => c.method === 'Delete');
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0].count).toBeGreaterThanOrEqual(2); // restore original + delete new
+    expect(puts).toHaveLength(0);
+    expect(deletes).toHaveLength(0);
+  });
+
+  it('redo flushes as a single Batch', async () => {
+    reset();
+    const spy = createSpyStore();
+    await init(spy);
+
+    const pageId = getOrCreatePage('test');
+    currentPage.value = pageId;
+    saveBlock({ id: 'r1', content: 'hello', pageId, parent: null, order: 0 });
+
+    beginUndo('split');
+    saveBlock({ ...blockData.value['r1'], content: 'hel' });
+    createBlockAfter('r1', 'lo');
+    commitUndo();
+
+    undo();
+    spy.calls.length = 0;
+    redo();
+
+    const batches = spy.calls.filter(c => c.method === 'Batch');
+    const puts = spy.calls.filter(c => c.method === 'Put');
+    const deletes = spy.calls.filter(c => c.method === 'Delete');
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0].count).toBeGreaterThanOrEqual(2);
+    expect(puts).toHaveLength(0);
+    expect(deletes).toHaveLength(0);
+  });
+
+  it('materializePage puts land in the undo group Batch', async () => {
+    reset();
+    const spy = createSpyStore();
+    await init(spy);
+
+    // Create a tentative page via navigation
+    navigateTo('Tentative Test');
+    const pageId = currentPage.value!;
+    const seedId = Object.keys(blockData.value).find(
+      id => blockData.value[id].pageId === pageId,
+    )!;
+
+    spy.calls.length = 0;
+
+    // Saving content inside an undo group triggers materializePage
+    beginUndo('add content');
+    saveBlock({ ...blockData.value[seedId], content: 'hello world' });
+    commitUndo();
+
+    const batches = spy.calls.filter(c => c.method === 'Batch');
+    const puts = spy.calls.filter(c => c.method === 'Put');
+
+    expect(batches).toHaveLength(1);
+    // Should contain at least: the page put (from materialize) + the block put
+    expect(batches[0].count).toBeGreaterThanOrEqual(2);
+    expect(puts).toHaveLength(0);
+  });
+});

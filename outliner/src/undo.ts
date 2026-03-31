@@ -5,7 +5,7 @@
 // Stacks are persisted to sessionStorage per page.
 
 import type { Block } from './types';
-import { currentPage, blockData, saveBlock, registerUndoHooks, setUndoSuppressed, purgeBlock } from './db';
+import { currentPage, blockData, saveBlock, registerUndoHooks, setUndoSuppressed, purgeBlock, beginBatch, flushBatch } from './db';
 
 type Patch = { id: string; before: Block | null; after: Block | null };
 type UndoEntry = { label: string; patches: Patch[] };
@@ -93,12 +93,14 @@ export function beginUndo(label: string) {
   activeGroup = [];
   groupLabel = label;
   groupPageId = currentPage.value ?? '';
+  beginBatch();
 }
 
-/** Commit the current group to the undo stack. */
+/** Commit the current group to the undo stack and flush store ops. */
 export function commitUndo() {
   if (!activeGroup || activeGroup.length === 0 || !groupPageId) {
     activeGroup = null;
+    flushBatch();
     return;
   }
   const stack = getUndoStack(groupPageId);
@@ -109,6 +111,7 @@ export function commitUndo() {
   persistStack(groupPageId, 'undo', stack);
   persistStack(groupPageId, 'redo', redo);
   activeGroup = null;
+  flushBatch();
 }
 
 export function canUndo(): boolean {
@@ -128,6 +131,7 @@ export function undo() {
   const entry = stack.pop();
   if (!entry) return;
   setUndoSuppressed(true);
+  beginBatch();
   for (let i = entry.patches.length - 1; i >= 0; i--) {
     const { id, before } = entry.patches[i];
     if (before) {
@@ -136,6 +140,7 @@ export function undo() {
       purgeBlock(id);
     }
   }
+  flushBatch();
   setUndoSuppressed(false);
   const redo = getRedoStack(pageId);
   redo.push(entry);
@@ -150,6 +155,7 @@ export function redo() {
   const entry = redoStack.pop();
   if (!entry) return;
   setUndoSuppressed(true);
+  beginBatch();
   for (const { id, after } of entry.patches) {
     if (after) {
       saveBlock(after);
@@ -157,6 +163,7 @@ export function redo() {
       purgeBlock(id);
     }
   }
+  flushBatch();
   setUndoSuppressed(false);
   const stack = getUndoStack(pageId);
   stack.push(entry);

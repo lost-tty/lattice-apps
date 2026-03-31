@@ -4,7 +4,7 @@
 // ordering, nesting predicates, collapse, backlinks, and journal helpers.
 
 import { signal, computed } from '@preact/signals';
-import type { Store, Page, Block, BlockNode, WatchEvent } from './types';
+import type { Store, StoreOp, Page, Block, BlockNode, WatchEvent } from './types';
 import { parseHeading, isJournalSlug, formatJournalTitle } from './parse';
 
 // --- Encoding ---
@@ -98,7 +98,7 @@ function materializePage(pageId: string) {
   const page = pageData.value[pageId];
   if (page) {
     const { id, ...rest } = page;
-    store?.Put({ key: encode('page/' + id), value: encode(JSON.stringify(rest)) });
+    emitPut(encode('page/' + id), encode(JSON.stringify(rest)));
   }
   // Persist any tentative blocks for this page
   for (const blockId of [...tentativeBlocks]) {
@@ -106,7 +106,7 @@ function materializePage(pageId: string) {
     if (block?.pageId === pageId) {
       tentativeBlocks.delete(blockId);
       const { id, ...rest } = block;
-      store?.Put({ key: encode('block/' + id), value: encode(JSON.stringify(rest)) });
+      emitPut(encode('block/' + id), encode(JSON.stringify(rest)));
     }
   }
 }
@@ -149,7 +149,7 @@ export function savePage(page: Page) {
   const saved = { ...page, updatedAt: now };
   pageData.value = { ...pageData.value, [page.id]: saved };
   const { id, ...rest } = saved;
-  store?.Put({ key: encode('page/' + id), value: encode(JSON.stringify(rest)) });
+  emitPut(encode('page/' + id), encode(JSON.stringify(rest)));
 }
 
 /** Find or create a page by title. Returns the page ID. */
@@ -163,23 +163,21 @@ export function getOrCreatePage(title: string, folder?: string): string {
   const resolvedFolder = folder ?? (isJournalSlug(title) ? 'journals' : undefined);
   const page: Page = { id, title, slug, folder: resolvedFolder, createdAt: now, updatedAt: now };
   pageData.value = { ...pageData.value, [id]: page };
-  store?.Put({ key: encode('page/' + id), value: encode(JSON.stringify({ title, slug, folder: resolvedFolder, createdAt: now, updatedAt: now })) });
+  emitPut(encode('page/' + id), encode(JSON.stringify({ title, slug, folder: resolvedFolder, createdAt: now, updatedAt: now })));
   return id;
 }
 
-export async function deletePage(pageId: string) {
-  const deletes: Promise<void>[] = [];
+export function deletePage(pageId: string) {
   const next: Record<string, Block> = {};
   for (const [id, b] of Object.entries(blockData.value)) {
-    if (b.pageId === pageId) deletes.push(store.Delete({ key: encode('block/' + id) }));
+    if (b.pageId === pageId) emitDelete(encode('block/' + id));
     else next[id] = b;
   }
   blockData.value = next;
-  deletes.push(store.Delete({ key: encode('page/' + pageId) }));
+  emitDelete(encode('page/' + pageId));
   const { [pageId]: _, ...restPages } = pageData.value;
   pageData.value = restPages;
   if (currentPage.value === pageId) currentPage.value = null;
-  await Promise.all(deletes);
 }
 
 // --- Navigation ---
@@ -284,7 +282,36 @@ export function purgeBlock(id: string) {
   const next = { ...blockData.value };
   delete next[id];
   blockData.value = next;
-  store?.Delete({ key: encode('block/' + id) });
+  emitDelete(encode('block/' + id));
+}
+
+// --- Batch accumulation ---
+//
+// When a batch is active, store writes accumulate instead of firing
+// immediately. flushBatch submits them as one atomic Batch call.
+// All store writes go through emitPut/emitDelete so the batching
+// decision lives in one place.
+
+let pendingOps: StoreOp[] | null = null;
+
+/** Start accumulating store ops. */
+export function beginBatch() { pendingOps = []; }
+
+/** Submit accumulated ops as one atomic Batch, then clear. */
+export function flushBatch() {
+  const ops = pendingOps;
+  pendingOps = null;
+  if (ops && ops.length > 0) store?.Batch({ ops });
+}
+
+function emitPut(key: Uint8Array, value: Uint8Array) {
+  if (pendingOps) pendingOps.push({ put: { key, value } });
+  else store?.Put({ key, value });
+}
+
+function emitDelete(key: Uint8Array) {
+  if (pendingOps) pendingOps.push({ delete: { key } });
+  else store?.Delete({ key });
 }
 
 // --- Block CRUD ---
@@ -316,10 +343,10 @@ export function saveBlock(block: Block) {
   if (tentativeBlocks.has(block.id)) return;
 
   const { id, ...rest } = saved;
-  store?.Put({ key: encode('block/' + id), value: encode(JSON.stringify(rest)) });
+  emitPut(encode('block/' + id), encode(JSON.stringify(rest)));
 }
 
-export async function deleteBlock(id: string) {
+export function deleteBlock(id: string) {
   const toDelete = [id, ...collectDescendants(id)];
   if (!undoRedoInProgress && patchHook) {
     for (const bid of toDelete) {
@@ -328,13 +355,11 @@ export async function deleteBlock(id: string) {
     }
   }
   const next: Record<string, Block> = {};
-  const deletes: Promise<void>[] = [];
   for (const [bid, b] of Object.entries(blockData.value)) {
-    if (toDelete.includes(bid)) deletes.push(store.Delete({ key: encode('block/' + bid) }));
-    else next[bid] = b;
+    if (!toDelete.includes(bid)) next[bid] = b;
   }
   blockData.value = next;
-  await Promise.all(deletes);
+  for (const bid of toDelete) emitDelete(encode('block/' + bid));
 }
 
 function collectDescendants(parentId: string): string[] {

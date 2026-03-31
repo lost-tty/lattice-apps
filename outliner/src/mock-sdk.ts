@@ -43,6 +43,24 @@ export function createMockStore(): Store {
       notify(k, null, true);
     },
 
+    async Batch({ ops }) {
+      // Apply all mutations atomically
+      const notifications: Array<{ key: string; value: Uint8Array | null; deleted: boolean }> = [];
+      for (const op of ops) {
+        if ('put' in op) {
+          const k = decode(op.put.key);
+          data.set(k, op.put.value);
+          notifications.push({ key: k, value: op.put.value, deleted: false });
+        } else if ('delete' in op) {
+          const k = decode(op.delete.key);
+          data.delete(k);
+          notifications.push({ key: k, value: null, deleted: true });
+        }
+      }
+      // Notify after all mutations are applied
+      for (const n of notifications) notify(n.key, n.value, n.deleted);
+    },
+
     subscribe(stream, { prefix }, cb) {
       const entry = { prefix: decode(prefix), cb };
       watchers.push(entry);
