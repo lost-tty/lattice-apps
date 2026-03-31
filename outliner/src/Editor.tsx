@@ -142,7 +142,6 @@ function BlockItem({ node }: { node: FlatBlock }) {
 
   // Edit mode: show markdown source.
   const md = blockToMarkdown(node);
-  const prefixLen = md.length - node.content.length;
 
   useLayoutEffect(() => {
     if (!isActive || !ref.current) return;
@@ -151,7 +150,7 @@ function BlockItem({ node }: { node: FlatBlock }) {
     pendingActivation = null;
     el.textContent = md;
     el.focus();
-    setCursor(el, activation?.cursor ?? 'end', prefixLen);
+    setCursor(el, activation?.cursor ?? 'end', md.length - node.content.length);
   }, [isActive]);
 
 
@@ -168,7 +167,9 @@ function BlockItem({ node }: { node: FlatBlock }) {
 
   function handleKeyDown(e: KeyboardEvent) {
     const el = ref.current!;
-    const { type: parsedType, content } = markdownToBlock(el.textContent || '');
+    const rawText = el.textContent || '';
+    const { type: parsedType, content } = markdownToBlock(rawText);
+    const prefixLen = rawText.length - content.length;
 
     // Undo / Redo
     if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
@@ -224,28 +225,17 @@ function BlockItem({ node }: { node: FlatBlock }) {
     }
 
     if (e.key === 'Backspace') {
-      // Cursor at start of content (at or before prefix) → join with previous
-      if (getCursorOffset(el) <= prefixLen && content !== '') {
+      // Cursor at absolute start → join with previous or delete block
+      if (getCursorOffset(el) === 0) {
         e.preventDefault();
-        beginUndo('join blocks');
+        beginUndo(content === '' ? 'delete block' : 'join blocks');
         const joined = joinBlockWithPrevious(node.id, content);
-        commitUndo();
-        if (joined) activateBlock(joined.prevId, joined.cursorPos);
-        return;
-      }
-
-      // Empty content → join or delete
-      if (content === '') {
-        e.preventDefault();
-        beginUndo('delete block');
-        const joined = joinBlockWithPrevious(node.id, '');
         if (joined) {
           activateBlock(joined.prevId, joined.cursorPos);
-        } else {
+        } else if (content === '') {
           removeBlock(node.id);
         }
         commitUndo();
-        return;
       }
       return;
     }
@@ -302,8 +292,9 @@ function BlockItem({ node }: { node: FlatBlock }) {
     e.preventDefault();
 
     const el = ref.current!;
-    const contentOffset = Math.max(0, getCursorOffset(el) - prefixLen);
-    const { content } = markdownToBlock(el.textContent ?? '');
+    const rawText = el.textContent ?? '';
+    const { content } = markdownToBlock(rawText);
+    const contentOffset = Math.max(0, getCursorOffset(el) - (rawText.length - content.length));
     const before = content.slice(0, contentOffset);
     const after = content.slice(contentOffset);
 
@@ -464,6 +455,7 @@ function BlockItem({ node }: { node: FlatBlock }) {
         <hr onClick={handleClick} />
       ) : isActive ? (
         <div
+          key="edit"
           ref={ref}
           class={contentClass}
           contentEditable
@@ -473,7 +465,7 @@ function BlockItem({ node }: { node: FlatBlock }) {
           onPaste={(e: Event) => handlePaste(e as ClipboardEvent)}
         />
       ) : (
-        <div class={contentClass} onClick={handleClick}>
+        <div key="view" class={contentClass} onClick={handleClick}>
           {!isPara && <span class="bullet-marker" />}
           {status && <span class={`todo-marker ${status}`} />}
           <span><Content text={viewText} fallback={<br />} /></span>
