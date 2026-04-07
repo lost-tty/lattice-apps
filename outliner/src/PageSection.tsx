@@ -9,7 +9,7 @@ import {
 } from './db';
 import { beginUndo, commitUndo, canUndo, canRedo, undo, redo } from './undo';
 import { parseHeading, parseAnnotations } from './parse';
-import { createBlockAfter } from './blockOps';
+import { createBlockAfter, hasIncompleteTodos } from './blockOps';
 import { getTableGrid } from './table';
 import { exportPage } from './importExport';
 import { activateBlock, collectDescendantIds } from './editorState';
@@ -18,6 +18,7 @@ import { TableBlock } from './TableBlock';
 import { KanbanBoard } from './KanbanBoard';
 import { BacklinksPanel } from './BacklinksPanel';
 import { DebugPanel, ASTContent } from './DebugPanel';
+import { PageTitleBlock } from './PageTitleBlock';
 
 // --- Block list rendering ---
 
@@ -65,6 +66,8 @@ export function PageSection({ pageId, titleClickable }: { pageId: string; titleC
   const tree = buildTree(pageId);
   const flat = flattenTree(tree);
   const backlinks = getBacklinks(pageId);
+  const hasPageIncompleteTodos = flat.some(b => hasIncompleteTodos(b.id));
+
   const [debugPanel, setDebugPanel] = useState<'off' | 'markdown' | 'ast'>('off');
 
   function togglePanel(panel: 'markdown' | 'ast') {
@@ -101,12 +104,11 @@ export function PageSection({ pageId, titleClickable }: { pageId: string; titleC
           <button class="toolbar-btn" onClick={handleCopyMarkdown} title="Copy as Markdown"><IconCopy /></button>
           <button class="toolbar-btn" onClick={handleDownloadMarkdown} title="Download page as Markdown"><IconDownload /></button>
         </div>
-        <h1
-          class={`page-title${titleClickable ? ' journal-day-title' : ''}`}
-          onClick={titleClickable ? () => navigateById(pageId) : undefined}
-        >
-          {pageTitle(pageId)}
-        </h1>
+        <PageTitleBlock
+          pageId={pageId}
+          titleClickable={titleClickable}
+          hasIncompleteTodosOnPage={hasPageIncompleteTodos}
+        />
         <div class="block-tree">
           {renderBlockList(flat)}
           <div

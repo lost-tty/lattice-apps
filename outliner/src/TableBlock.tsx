@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState } from 'preact/hooks';
 import { Content } from './renderContent';
+import { ContextMenu, type MenuState } from './ContextMenu';
 import type { FlatBlock } from './db';
 import type { Block } from './types';
 import {
@@ -13,36 +14,6 @@ import { shared, getVisualDepth, startBlockDrag } from './editorState';
 // Module-level drag state for table row/col reordering
 let dragRowState: { tableId: string; rowOrder: number } | null = null;
 let dragColState: { tableId: string; colOrder: number } | null = null;
-
-// --- Context menu ---
-
-type MenuState = { x: number; y: number; items: Array<{ label: string; action: () => void }> } | null;
-
-function ContextMenu({ menu, onClose }: { menu: MenuState; onClose: () => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!menu) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [menu]);
-
-  if (!menu) return null;
-  return (
-    <div ref={ref} class="context-menu" style={`left:${menu.x}px;top:${menu.y}px`}>
-      {menu.items.map(item => (
-        <button
-          key={item.label}
-          class="context-menu-item"
-          onClick={() => { item.action(); onClose(); }}
-        >{item.label}</button>
-      ))}
-    </div>
-  );
-}
 
 // --- Table ---
 

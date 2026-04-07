@@ -20,6 +20,7 @@ import {
 import {
   createBlockAfter, createChildBlock, indentBlock, outdentBlock,
   removeBlock, joinBlockWithPrevious, fixHeadingSections, moveBlock,
+  carryForward, carryForwardAll,
 } from '../src/blockOps';
 import {
   getTableGrid, createTable, insertTableRow, insertTableCol,
@@ -1910,6 +1911,28 @@ describe('moveBlock', () => {
     // (non-heading after a heading at the same level)
     expect(blockData.value['2'].parent).toBe('3');
   });
+
+  it('cross-page move updates pageId on all descendants', () => {
+    const pageA = getOrCreatePage('Page A');
+    const pageB = getOrCreatePage('Page B');
+
+    // Page A has a parent block with two levels of children
+    saveBlock({ id: 'p1', content: 'parent', pageId: pageA, parent: null, order: 0 });
+    saveBlock({ id: 'c1', content: 'child', pageId: pageA, parent: 'p1', order: 0 });
+    saveBlock({ id: 'gc1', content: 'grandchild', pageId: pageA, parent: 'c1', order: 0 });
+
+    // Page B has a target block
+    saveBlock({ id: 't1', content: 'target', pageId: pageB, parent: null, order: 0 });
+
+    // Move p1 (with children) to page B, nested under t1
+    moveBlock('p1', 't1', 'nested');
+
+    // The moved block should be on page B
+    expect(blockData.value['p1'].pageId).toBe(pageB);
+    // All descendants should also have their pageId updated
+    expect(blockData.value['c1'].pageId).toBe(pageB);
+    expect(blockData.value['gc1'].pageId).toBe(pageB);
+  });
 });
 
 describe('fixHeadingSections', () => {
@@ -2281,5 +2304,442 @@ describe('batch accumulation', () => {
     // Should contain at least: the page put (from materialize) + the block put
     expect(batches[0].count).toBeGreaterThanOrEqual(2);
     expect(puts).toHaveLength(0);
+  });
+});
+
+// --- Carry forward ---
+
+describe('carryForward', () => {
+  let sourceId: string;
+  let targetId: string;
+
+  beforeEach(() => {
+    sourceId = getOrCreatePage('2026-04-07');
+    targetId = getOrCreatePage('2026-04-08');
+  });
+
+  it('carries forward a single incomplete todo', () => {
+    saveBlock({ id: 's1', content: '[ ] Fix bug', pageId: sourceId, parent: null, order: 0 });
+
+    carryForward('s1', targetId);
+
+    // Source block gets link, no longer a todo
+    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] Fix bug');
+    // New block created on target page with the todo content
+    const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
+    expect(targetBlocks).toHaveLength(1);
+    expect(targetBlocks[0].content).toBe('[ ] Fix bug');
+  });
+
+  it('carries forward a keyword todo (TODO, DOING)', () => {
+    saveBlock({ id: 's1', content: 'TODO Write tests', pageId: sourceId, parent: null, order: 0 });
+
+    carryForward('s1', targetId);
+
+    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] Write tests');
+    const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
+    expect(targetBlocks).toHaveLength(1);
+    expect(targetBlocks[0].content).toBe('TODO Write tests');
+  });
+
+  it('skips complete children, carries incomplete children', () => {
+    saveBlock({ id: 's1', content: '[ ] Project X', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: '[x] Research', pageId: sourceId, parent: 's1', order: 0 });
+    saveBlock({ id: 's3', content: '[ ] Prototype', pageId: sourceId, parent: 's1', order: 1 });
+
+    carryForward('s1', targetId);
+
+    // Source: root and incomplete child get links, complete child untouched
+    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] Project X');
+    expect(blockData.value['s2'].content).toBe('[x] Research');
+    expect(blockData.value['s3'].content).toBe('[[2026-04-08]] Prototype');
+
+    // Target: root + incomplete child, no complete child
+    const targetBlocks = Object.values(blockData.value)
+      .filter(b => b.pageId === targetId)
+      .sort((a, b) => a.order - b.order);
+    expect(targetBlocks).toHaveLength(2);
+    expect(targetBlocks[0].content).toBe('[ ] Project X');
+    expect(targetBlocks[1].content).toBe('[ ] Prototype');
+    expect(targetBlocks[1].parent).toBe(targetBlocks[0].id);
+  });
+
+  it('prunes entire subtree of a complete block', () => {
+    saveBlock({ id: 's1', content: '[x] Done task', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: '[ ] Leftover subtask', pageId: sourceId, parent: 's1', order: 0 });
+
+    // Carry forward on a complete block should be a no-op
+    carryForward('s1', targetId);
+
+    // Source unchanged
+    expect(blockData.value['s1'].content).toBe('[x] Done task');
+    expect(blockData.value['s2'].content).toBe('[ ] Leftover subtask');
+    // Nothing on target
+    const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
+    expect(targetBlocks).toHaveLength(0);
+  });
+
+  it('carries forward non-todo children as context', () => {
+    saveBlock({ id: 's1', content: '[ ] Fix bug', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: 'Repro steps: open settings', pageId: sourceId, parent: 's1', order: 0 });
+    saveBlock({ id: 's3', content: '[ ] Write fix', pageId: sourceId, parent: 's1', order: 1 });
+
+    carryForward('s1', targetId);
+
+    // Source: todos get links, non-todo child is deleted (moved)
+    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] Fix bug');
+    expect(blockData.value['s2']).toBeUndefined(); // moved to target
+    expect(blockData.value['s3'].content).toBe('[[2026-04-08]] Write fix');
+
+    // Target: root + context + incomplete child
+    const targetBlocks = Object.values(blockData.value)
+      .filter(b => b.pageId === targetId)
+      .sort((a, b) => a.order - b.order);
+    expect(targetBlocks).toHaveLength(3);
+    expect(targetBlocks[0].content).toBe('[ ] Fix bug');
+    expect(targetBlocks[1].content).toBe('Repro steps: open settings');
+    expect(targetBlocks[2].content).toBe('[ ] Write fix');
+    // All children of the root
+    expect(targetBlocks[1].parent).toBe(targetBlocks[0].id);
+    expect(targetBlocks[2].parent).toBe(targetBlocks[0].id);
+  });
+
+  it('handles deeply nested incomplete tasks', () => {
+    saveBlock({ id: 's1', content: '[ ] Project', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: '[ ] Phase 1', pageId: sourceId, parent: 's1', order: 0 });
+    saveBlock({ id: 's3', content: '[x] Mockup', pageId: sourceId, parent: 's2', order: 0 });
+    saveBlock({ id: 's4', content: '[ ] Implement', pageId: sourceId, parent: 's2', order: 1 });
+
+    carryForward('s1', targetId);
+
+    // Target: Project > Phase 1 > Implement (Mockup pruned)
+    const targetBlocks = Object.values(blockData.value)
+      .filter(b => b.pageId === targetId);
+    expect(targetBlocks).toHaveLength(3);
+    const names = targetBlocks.map(b => b.content).sort();
+    expect(names).toContain('[ ] Project');
+    expect(names).toContain('[ ] Phase 1');
+    expect(names).toContain('[ ] Implement');
+    // Mockup should NOT be on target
+    expect(names).not.toContain('[x] Mockup');
+  });
+
+  it('preserves nesting structure on target page', () => {
+    saveBlock({ id: 's1', content: '[ ] Root', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: '[ ] Child', pageId: sourceId, parent: 's1', order: 0 });
+    saveBlock({ id: 's3', content: '[ ] Grandchild', pageId: sourceId, parent: 's2', order: 0 });
+
+    carryForward('s1', targetId);
+
+    const targetBlocks = Object.values(blockData.value)
+      .filter(b => b.pageId === targetId);
+    expect(targetBlocks).toHaveLength(3);
+
+    const root = targetBlocks.find(b => b.content === '[ ] Root')!;
+    const child = targetBlocks.find(b => b.content === '[ ] Child')!;
+    const grandchild = targetBlocks.find(b => b.content === '[ ] Grandchild')!;
+
+    expect(root.parent).toBeNull();
+    expect(child.parent).toBe(root.id);
+    expect(grandchild.parent).toBe(child.id);
+  });
+
+  it('does not double-carry a block already marked with a link', () => {
+    saveBlock({ id: 's1', content: '[[2026-04-07]] Fix bug', pageId: sourceId, parent: null, order: 0 });
+
+    carryForward('s1', targetId);
+
+    // Should be a no-op — block is not a todo
+    const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
+    expect(targetBlocks).toHaveLength(0);
+    expect(blockData.value['s1'].content).toBe('[[2026-04-07]] Fix bug');
+  });
+
+  it('carries forward into a page that already has blocks', () => {
+    saveBlock({ id: 't1', content: '[ ] Existing task', pageId: targetId, parent: null, order: 0 });
+    saveBlock({ id: 's1', content: '[ ] New task', pageId: sourceId, parent: null, order: 0 });
+
+    carryForward('s1', targetId);
+
+    const targetBlocks = Object.values(blockData.value)
+      .filter(b => b.pageId === targetId)
+      .sort((a, b) => a.order - b.order);
+    expect(targetBlocks).toHaveLength(2);
+    expect(targetBlocks[0].content).toBe('[ ] Existing task');
+    // New task should be after existing
+    expect(targetBlocks[1].content).toBe('[ ] New task');
+  });
+
+  it('whole operation is one undo group', () => {
+    currentPage.value = sourceId;
+    saveBlock({ id: 's1', content: '[ ] Task', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: '[ ] Subtask', pageId: sourceId, parent: 's1', order: 0 });
+
+    carryForward('s1', targetId);
+
+    // Verify blocks were carried
+    const targetBefore = Object.values(blockData.value).filter(b => b.pageId === targetId);
+    expect(targetBefore).toHaveLength(2);
+
+    // Undo should reverse the entire operation
+    undo();
+
+    expect(blockData.value['s1'].content).toBe('[ ] Task');
+    expect(blockData.value['s2'].content).toBe('[ ] Subtask');
+    const targetAfter = Object.values(blockData.value).filter(b => b.pageId === targetId);
+    expect(targetAfter).toHaveLength(0);
+  });
+
+  it('carries forward a non-todo parent that contains incomplete todos', () => {
+    saveBlock({ id: 's1', content: 'Project X', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: '[ ] Task A', pageId: sourceId, parent: 's1', order: 0 });
+    saveBlock({ id: 's3', content: '[x] Task B', pageId: sourceId, parent: 's1', order: 1 });
+
+    carryForward('s1', targetId);
+
+    // Source: root gets link marker, complete child untouched, incomplete child gets link
+    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] Project X');
+    expect(blockData.value['s2'].content).toBe('[[2026-04-08]] Task A');
+    expect(blockData.value['s3'].content).toBe('[x] Task B');
+
+    // Target: root + incomplete child (complete child pruned)
+    const targetBlocks = Object.values(blockData.value)
+      .filter(b => b.pageId === targetId)
+      .sort((a, b) => a.order - b.order);
+    expect(targetBlocks).toHaveLength(2);
+    expect(targetBlocks[0].content).toBe('Project X');
+    expect(targetBlocks[1].content).toBe('[ ] Task A');
+    expect(targetBlocks[1].parent).toBe(targetBlocks[0].id);
+  });
+
+  it('skips a non-todo parent with no incomplete todo descendants', () => {
+    saveBlock({ id: 's1', content: 'Project X', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: '[x] Done', pageId: sourceId, parent: 's1', order: 0 });
+    saveBlock({ id: 's3', content: 'Just a note', pageId: sourceId, parent: 's1', order: 1 });
+
+    carryForward('s1', targetId);
+
+    // No-op: no incomplete todos anywhere in subtree
+    expect(blockData.value['s1'].content).toBe('Project X');
+    expect(blockData.value['s2'].content).toBe('[x] Done');
+    expect(blockData.value['s3'].content).toBe('Just a note');
+    const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
+    expect(targetBlocks).toHaveLength(0);
+  });
+
+  it('carries forward non-todo parent with deeply nested incomplete todo', () => {
+    saveBlock({ id: 's1', content: 'Project', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: 'Phase 1', pageId: sourceId, parent: 's1', order: 0 });
+    saveBlock({ id: 's3', content: '[ ] Deep task', pageId: sourceId, parent: 's2', order: 0 });
+
+    carryForward('s1', targetId);
+
+    // Source: all three get markers (root and Phase 1 are non-todo, deep task is todo)
+    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] Project');
+    expect(blockData.value['s2']).toBeUndefined(); // non-todo child moved
+    expect(blockData.value['s3'].content).toBe('[[2026-04-08]] Deep task');
+
+    // Target: full structure preserved
+    const targetBlocks = Object.values(blockData.value)
+      .filter(b => b.pageId === targetId);
+    expect(targetBlocks).toHaveLength(3);
+    const root = targetBlocks.find(b => b.content === 'Project')!;
+    const phase = targetBlocks.find(b => b.content === 'Phase 1')!;
+    const task = targetBlocks.find(b => b.content === '[ ] Deep task')!;
+    expect(root.parent).toBeNull();
+    expect(phase.parent).toBe(root.id);
+    expect(task.parent).toBe(phase.id);
+  });
+});
+
+describe('carryForwardAll', () => {
+  it('carries forward all incomplete root todos from a page', () => {
+    const sourceId = getOrCreatePage('2026-04-07');
+    const targetId = getOrCreatePage('2026-04-08');
+
+    saveBlock({ id: 's1', content: '[ ] Task A', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: '[x] Done B', pageId: sourceId, parent: null, order: 1 });
+    saveBlock({ id: 's3', content: '[ ] Task C', pageId: sourceId, parent: null, order: 2 });
+    saveBlock({ id: 's4', content: 'Plain text', pageId: sourceId, parent: null, order: 3 });
+
+    carryForwardAll(sourceId, targetId);
+
+    // Source: incomplete todos get links, complete and plain untouched
+    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] Task A');
+    expect(blockData.value['s2'].content).toBe('[x] Done B');
+    expect(blockData.value['s3'].content).toBe('[[2026-04-08]] Task C');
+    expect(blockData.value['s4'].content).toBe('Plain text');
+
+    // Target: only the two incomplete todos
+    const targetBlocks = Object.values(blockData.value)
+      .filter(b => b.pageId === targetId)
+      .sort((a, b) => a.order - b.order);
+    expect(targetBlocks).toHaveLength(2);
+    expect(targetBlocks[0].content).toBe('[ ] Task A');
+    expect(targetBlocks[1].content).toBe('[ ] Task C');
+  });
+
+  it('is a no-op when no incomplete todos exist', () => {
+    const sourceId = getOrCreatePage('2026-04-07');
+    const targetId = getOrCreatePage('2026-04-08');
+
+    saveBlock({ id: 's1', content: '[x] Done', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: 'Just text', pageId: sourceId, parent: null, order: 1 });
+
+    carryForwardAll(sourceId, targetId);
+
+    expect(blockData.value['s1'].content).toBe('[x] Done');
+    expect(blockData.value['s2'].content).toBe('Just text');
+    const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
+    expect(targetBlocks).toHaveLength(0);
+  });
+
+  it('whole page carry forward is one undo group', () => {
+    const sourceId = getOrCreatePage('2026-04-07');
+    const targetId = getOrCreatePage('2026-04-08');
+    currentPage.value = sourceId;
+
+    saveBlock({ id: 's1', content: '[ ] A', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: '[ ] B', pageId: sourceId, parent: null, order: 1 });
+
+    carryForwardAll(sourceId, targetId);
+
+    expect(Object.values(blockData.value).filter(b => b.pageId === targetId)).toHaveLength(2);
+
+    undo();
+
+    expect(blockData.value['s1'].content).toBe('[ ] A');
+    expect(blockData.value['s2'].content).toBe('[ ] B');
+    expect(Object.values(blockData.value).filter(b => b.pageId === targetId)).toHaveLength(0);
+  });
+
+  it('carries forward non-todo parent roots with todo descendants', () => {
+    const sourceId = getOrCreatePage('2026-04-07');
+    const targetId = getOrCreatePage('2026-04-08');
+
+    saveBlock({ id: 's1', content: '[ ] Flat todo', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: 'Project X', pageId: sourceId, parent: null, order: 1 });
+    saveBlock({ id: 's3', content: '[ ] Nested todo', pageId: sourceId, parent: 's2', order: 0 });
+
+    carryForwardAll(sourceId, targetId);
+
+    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] Flat todo');
+    expect(blockData.value['s2'].content).toBe('[[2026-04-08]] Project X');
+    expect(blockData.value['s3'].content).toBe('[[2026-04-08]] Nested todo');
+
+    const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
+    expect(targetBlocks).toHaveLength(3);
+
+    const flatTodo = targetBlocks.find(b => b.content === '[ ] Flat todo')!;
+    const project = targetBlocks.find(b => b.content === 'Project X')!;
+    const nested = targetBlocks.find(b => b.content === '[ ] Nested todo')!;
+
+    expect(flatTodo.parent).toBeNull();
+    expect(project.parent).toBeNull();
+    expect(nested.parent).toBe(project.id);
+    // Flat todo should come before project (preserves source order)
+    expect(flatTodo.order).toBeLessThan(project.order);
+  });
+});
+
+// --- Carry forward edge cases ---
+
+describe('carryForward edge cases', () => {
+  let sourceId: string;
+  let targetId: string;
+
+  beforeEach(() => {
+    sourceId = getOrCreatePage('2026-04-07');
+    targetId = getOrCreatePage('2026-04-08');
+  });
+
+  it('is a no-op when carrying forward to the same page', () => {
+    saveBlock({ id: 's1', content: '[ ] Task', pageId: sourceId, parent: null, order: 0 });
+
+    carryForward('s1', sourceId);
+
+    // Block should be unchanged — no link to itself, no duplicates
+    expect(blockData.value['s1'].content).toBe('[ ] Task');
+    const allOnSource = Object.values(blockData.value).filter(b => b.pageId === sourceId);
+    expect(allOnSource).toHaveLength(1);
+  });
+
+  it('carries forward DOING and WAIT statuses', () => {
+    saveBlock({ id: 's1', content: 'DOING In progress', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: 'WAIT Blocked', pageId: sourceId, parent: null, order: 1 });
+
+    carryForward('s1', targetId);
+    carryForward('s2', targetId);
+
+    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] In progress');
+    expect(blockData.value['s2'].content).toBe('[[2026-04-08]] Blocked');
+
+    const targetBlocks = Object.values(blockData.value)
+      .filter(b => b.pageId === targetId)
+      .sort((a, b) => a.order - b.order);
+    expect(targetBlocks).toHaveLength(2);
+    expect(targetBlocks[0].content).toBe('DOING In progress');
+    expect(targetBlocks[1].content).toBe('WAIT Blocked');
+  });
+
+  it('handles interleaved complete, non-todo, and incomplete children', () => {
+    saveBlock({ id: 's1', content: '[ ] Task', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: 'notes A', pageId: sourceId, parent: 's1', order: 0 });
+    saveBlock({ id: 's3', content: '[x] Done step', pageId: sourceId, parent: 's1', order: 1 });
+    saveBlock({ id: 's4', content: 'notes B', pageId: sourceId, parent: 's1', order: 2 });
+    saveBlock({ id: 's5', content: '[ ] Pending', pageId: sourceId, parent: 's1', order: 3 });
+
+    carryForward('s1', targetId);
+
+    // Source: complete child stays, non-todo children moved, todos get links
+    expect(blockData.value['s3'].content).toBe('[x] Done step');
+    expect(blockData.value['s2']).toBeUndefined(); // moved
+    expect(blockData.value['s4']).toBeUndefined(); // moved
+
+    // Target: task + notes A + notes B + pending (done step pruned)
+    const targetBlocks = Object.values(blockData.value)
+      .filter(b => b.pageId === targetId)
+      .sort((a, b) => a.order - b.order);
+    expect(targetBlocks).toHaveLength(4);
+    const contents = targetBlocks.map(b => b.content);
+    expect(contents).toContain('[ ] Task');
+    expect(contents).toContain('notes A');
+    expect(contents).toContain('notes B');
+    expect(contents).toContain('[ ] Pending');
+    expect(contents).not.toContain('[x] Done step');
+  });
+
+  it('reparents complete children when non-todo intermediate is deleted', () => {
+    saveBlock({ id: 's1', content: '[ ] Root', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: 'Phase 1', pageId: sourceId, parent: 's1', order: 0 });
+    saveBlock({ id: 's3', content: '[x] Done thing', pageId: sourceId, parent: 's2', order: 0 });
+    saveBlock({ id: 's4', content: '[ ] Pending thing', pageId: sourceId, parent: 's2', order: 1 });
+
+    carryForward('s1', targetId);
+
+    // Phase 1 (non-todo) was deleted from source
+    expect(blockData.value['s2']).toBeUndefined();
+    // [x] Done thing should be reparented to s1 (Root) on source
+    expect(blockData.value['s3'].content).toBe('[x] Done thing');
+    expect(blockData.value['s3'].parent).toBe('s1');
+
+    // Target should have Root > Phase 1 > Pending thing
+    const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
+    expect(targetBlocks).toHaveLength(3);
+    const root = targetBlocks.find(b => b.content === '[ ] Root')!;
+    const phase = targetBlocks.find(b => b.content === 'Phase 1')!;
+    const pending = targetBlocks.find(b => b.content === '[ ] Pending thing')!;
+    expect(phase.parent).toBe(root.id);
+    expect(pending.parent).toBe(phase.id);
+  });
+
+  it('preserves block type on copy', () => {
+    saveBlock({ id: 's1', content: '[ ] Task', pageId: sourceId, parent: null, order: 0, type: 'paragraph' });
+
+    carryForward('s1', targetId);
+
+    const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
+    expect(targetBlocks).toHaveLength(1);
+    expect(targetBlocks[0].type).toBe('paragraph');
   });
 });

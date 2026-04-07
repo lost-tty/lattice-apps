@@ -164,7 +164,7 @@ describe('Heading visual depth', () => {
     render(<Editor />, container);
     await flush();
 
-    const blocks = container.querySelectorAll('.block');
+    const blocks = container.querySelectorAll('.block:not(.page-title-block)');
     const depth = (el: Element) => (el as HTMLElement).style.getPropertyValue('--depth').trim();
     // Heading at depth 0, children at tree depth 1 but visual depth 0
     expect(depth(blocks[0])).toBe('0');
@@ -182,7 +182,7 @@ describe('Heading visual depth', () => {
     render(<Editor />, container);
     await flush();
 
-    const blocks = container.querySelectorAll('.block');
+    const blocks = container.querySelectorAll('.block:not(.page-title-block)');
     const depth = (el: Element) => (el as HTMLElement).style.getPropertyValue('--depth').trim();
     // Heading depth 0 (visual 0), bullet depth 1 (visual 0), sub-bullet depth 2 (visual 1)
     expect(depth(blocks[0])).toBe('0');
@@ -200,7 +200,7 @@ describe('Heading visual depth', () => {
     render(<Editor />, container);
     await flush();
 
-    const blocks = container.querySelectorAll('.block');
+    const blocks = container.querySelectorAll('.block:not(.page-title-block)');
     const depth = (el: Element) => (el as HTMLElement).style.getPropertyValue('--depth').trim();
     // # Top: depth 0, visual 0
     // ## Sub: depth 1, visual 0 (one heading ancestor absorbed)

@@ -1,15 +1,16 @@
-import { useRef, useLayoutEffect } from 'preact/hooks';
+import { useRef, useLayoutEffect, useState } from 'preact/hooks';
 import { Content } from './renderContent';
+import { ContextMenu, type MenuState } from './ContextMenu';
 import type { FlatBlock } from './db';
 import {
-  activeBlockId, blockData,
+  activeBlockId, blockData, pageData,
   saveBlock, deleteBlock, buildTree, flattenTree, hasChildren, toggleCollapse,
   blockKind, canAcceptChildren, isCollapsed, blockToMarkdown, markdownToBlock,
-  navigateTo,
+  navigateTo, getOrCreatePage,
 } from './db';
 import { beginUndo, commitUndo, undo, redo } from './undo';
-import { parseHeading, parseAnnotations, parseTodoStatus, cycleTodoStatus, parseTableCells } from './parse';
-import { createBlockAfter, createChildBlock, indentBlock, outdentBlock, removeBlock, joinBlockWithPrevious, moveBlock, isDescendant } from './blockOps';
+import { parseHeading, parseAnnotations, parseTodoStatus, cycleTodoStatus, parseTableCells, todaySlug } from './parse';
+import { createBlockAfter, createChildBlock, indentBlock, outdentBlock, removeBlock, joinBlockWithPrevious, moveBlock, isDescendant, carryForward, hasIncompleteTodos } from './blockOps';
 import { createTable, insertTableRow } from './table';
 import { parseMarkdownToItems, insertBlocksAfter } from './importExport';
 import { getCursorOffset, setCursor } from './dom';
@@ -294,12 +295,50 @@ export function BlockItem({ node }: { node: FlatBlock }) {
     shared.dragBlockId = null;
   }
 
-  // --- Render ---
+  // --- Parsed block metadata ---
 
   const isPara = node.type === 'paragraph';
   const collapsed = hasKids && isCollapsed(node.id);
   const { status, text: statusText } = parseTodoStatus(node.content);
   const { level, text: headingText } = parseHeading(statusText);
+
+  // --- Context menu ---
+
+  const [menu, setMenu] = useState<MenuState>(null);
+
+  function handleContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    const items: Array<{ label: string; action: () => void }> = [];
+
+    if (hasIncompleteTodos(node.id)) {
+      const today = todaySlug();
+      const todayPage = Object.values(pageData.value).find(p => p.title === today);
+      const isOnToday = todayPage && node.pageId === todayPage.id;
+      if (!isOnToday) {
+        items.push({
+          label: 'Carry forward to today',
+          action: () => {
+            const targetPageId = getOrCreatePage(today, 'journals');
+            carryForward(node.id, targetPageId);
+          },
+        });
+      }
+    }
+
+    items.push({
+      label: 'Delete block',
+      action: () => {
+        beginUndo('delete block');
+        deleteBlock(node.id);
+        commitUndo();
+        activeBlockId.value = null;
+      },
+    });
+
+    if (items.length > 0) setMenu({ x: e.clientX, y: e.clientY, items });
+  }
+
+  // --- Render ---
   const viewText = level ? parseAnnotations(headingText).text : headingText;
   const contentClass = [
     'block-content',
@@ -315,6 +354,7 @@ export function BlockItem({ node }: { node: FlatBlock }) {
     <div
       class="block"
       style={isHr && !isActive ? '--depth: 0' : `--depth: ${visualDepth}`}
+      onContextMenu={(e: Event) => handleContextMenu(e as MouseEvent)}
       onDragOver={(e: Event) => handleDragOver(e as DragEvent)}
       onDragLeave={(e: Event) => handleDragLeave(e as DragEvent)}
       onDrop={(e: Event) => handleDrop(e as DragEvent)}
@@ -349,6 +389,7 @@ export function BlockItem({ node }: { node: FlatBlock }) {
           )}
         </div>
       )}
+      <ContextMenu menu={menu} onClose={() => setMenu(null)} />
     </div>
   );
 }

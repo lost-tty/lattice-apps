@@ -570,13 +570,26 @@ export function getBacklinks(pageId: string): { block: Block; children: FlatBloc
   const simpleTagRe = /^\w[\w\-/]*$/.test(page.title)
     ? new RegExp(`(^|\\s)#${escapeRegex(page.title)}(?=\\s|$)`, 'i')
     : null;
-  const refBlocks = Object.values(blockData.value)
+  const refBlockIds = new Set<string>();
+  const allRefBlocks = Object.values(blockData.value)
     .filter(b => b.pageId !== pageId && (
       wikiRe.test(b.content) ||
       multiWordTagRe.test(b.content) ||
       (simpleTagRe && simpleTagRe.test(b.content))
     ));
-  return refBlocks.map(block => {
+  for (const b of allRefBlocks) refBlockIds.add(b.id);
+
+  // Filter out blocks whose ancestor is already a ref block (avoid duplicate entries)
+  const rootRefBlocks = allRefBlocks.filter(b => {
+    let pid = b.parent;
+    while (pid) {
+      if (refBlockIds.has(pid)) return false;
+      pid = blockData.value[pid]?.parent ?? null;
+    }
+    return true;
+  });
+
+  return rootRefBlocks.map(block => {
     const allBlocks = Object.values(blockData.value).filter(b => b.pageId === block.pageId);
     const childTree = buildSubtree(allBlocks, block.id);
     const children = flattenTree(childTree, 1);

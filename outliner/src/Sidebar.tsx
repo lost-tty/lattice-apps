@@ -151,7 +151,7 @@ export function Sidebar() {
             class={`sidebar-item sidebar-item-icon ${currentId === todayPage?.id ? 'active' : ''}`}
             onClick={() => navigateTo(todayTitle)}
           >
-            <span class="sidebar-icon"><IconCalendar /></span>
+            <span class="sidebar-icon journal-icon"><IconCalendar /></span>
             Today
           </button>
           {recentJournals.map(page => (
@@ -160,7 +160,7 @@ export function Sidebar() {
               class={`sidebar-item sidebar-item-icon ${currentId === page.id ? 'active' : ''}`}
               onClick={() => navigateById(page.id)}
             >
-              <span class="sidebar-icon"><IconCalendar /></span>
+              <span class="sidebar-icon journal-icon"><IconCalendar /></span>
               {pageTitle(page.id)}
             </button>
           ))}
@@ -265,7 +265,7 @@ function MonthGroupRow({ label, pages, currentId }: {
           class={`sidebar-item sidebar-item-icon sidebar-indent-1 ${currentId === page.id ? 'active' : ''}`}
           onClick={() => navigateById(page.id)}
         >
-          <span class="sidebar-icon"><IconCalendar /></span>
+          <span class="sidebar-icon journal-icon"><IconCalendar /></span>
           {pageTitle(page.id)}
         </button>
       ))}
@@ -307,7 +307,7 @@ function MonthInYear({ month, currentId }: { month: MonthGroup; currentId: strin
           class={`sidebar-item sidebar-item-icon sidebar-indent-2 ${currentId === page.id ? 'active' : ''}`}
           onClick={() => navigateById(page.id)}
         >
-          <span class="sidebar-icon"><IconCalendar /></span>
+          <span class="sidebar-icon journal-icon"><IconCalendar /></span>
           {pageTitle(page.id)}
         </button>
       ))}
@@ -319,7 +319,7 @@ function PageRow({ page, currentId }: { page: Page; currentId: string | null }) 
   return (
     <div class={`sidebar-item-row ${currentId === page.id ? 'active' : ''}`}>
       <button class="sidebar-item sidebar-item-icon" onClick={() => navigateById(page.id)}>
-        <span class="sidebar-icon"><IconFile /></span>
+        <span class="sidebar-icon page-icon"><IconFile /></span>
         {page.title}
       </button>
       <button
