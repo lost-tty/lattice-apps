@@ -25,7 +25,7 @@ export function PageTitleBlock({
 
     if (hasIncompleteTodosOnPage && !isToday) {
       items.push({
-        label: 'Carry forward all to today',
+        label: 'carry forward all to today',
         action: () => {
           const targetPageId = getOrCreatePage(todaySlug(), 'journals');
           carryForwardAll(pageId, targetPageId);

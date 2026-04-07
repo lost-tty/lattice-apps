@@ -316,7 +316,7 @@ export function BlockItem({ node }: { node: FlatBlock }) {
       const isOnToday = todayPage && node.pageId === todayPage.id;
       if (!isOnToday) {
         items.push({
-          label: 'Carry forward to today',
+          label: 'carry forward to today',
           action: () => {
             const targetPageId = getOrCreatePage(today, 'journals');
             carryForward(node.id, targetPageId);
@@ -326,7 +326,7 @@ export function BlockItem({ node }: { node: FlatBlock }) {
     }
 
     items.push({
-      label: 'Delete block',
+      label: 'delete block',
       action: () => {
         beginUndo('delete block');
         deleteBlock(node.id);

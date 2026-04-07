@@ -15,11 +15,12 @@ import { buildTar, parseTar } from './tar';
 import { IconDownload, IconUpload, IconChevronRight, IconChevronDown, IconCalendar, IconFile } from './Icons';
 import type { Page } from './types';
 
-interface MonthGroup { label: string; key: string; pages: Page[] }
+interface MonthGroup { label: string; monthName: string; key: string; pages: Page[] }
 interface YearGroup { year: string; months: MonthGroup[]; totalCount: number }
+interface DecadeGroup { decade: string; years: YearGroup[]; totalCount: number }
 
-/** Group older journal pages: current year by month, past years collapsed. */
-function groupOlderJournals(pages: Page[]): { currentYearMonths: MonthGroup[]; pastYears: YearGroup[] } {
+/** Group older journal pages: current year by month, past years by decade. */
+function groupOlderJournals(pages: Page[]): { currentYearMonths: MonthGroup[]; pastYears: YearGroup[]; decades: DecadeGroup[] } {
   const currentYear = new Date().getFullYear().toString();
   const byYear = new Map<string, Map<string, Page[]>>();
   for (const p of pages) {
@@ -37,24 +38,52 @@ function groupOlderJournals(pages: Page[]): { currentYearMonths: MonthGroup[]; p
       .map(([key, pages]) => {
         const [year, month] = key.split('-');
         const monthName = new Date(Number(year), Number(month) - 1).toLocaleString('default', { month: 'long' });
-        return { label: `${monthName} ${year}`, key, pages };
+        return { label: `${monthName} ${year}`, monthName, key, pages };
       });
+  }
+
+  function buildYearGroup(year: string, monthsMap: Map<string, Page[]>): YearGroup {
+    return {
+      year,
+      months: buildMonthGroups(monthsMap),
+      totalCount: [...monthsMap.values()].reduce((sum, p) => sum + p.length, 0),
+    };
   }
 
   const currentYearMonths = byYear.has(currentYear)
     ? buildMonthGroups(byYear.get(currentYear)!)
     : [];
 
-  const pastYears: YearGroup[] = [...byYear.entries()]
+  const allPastYears = [...byYear.entries()]
     .filter(([y]) => y !== currentYear)
     .sort((a, b) => b[0].localeCompare(a[0]))
-    .map(([year, monthsMap]) => ({
-      year,
-      months: buildMonthGroups(monthsMap),
-      totalCount: [...monthsMap.values()].reduce((sum, p) => sum + p.length, 0),
+    .map(([year, monthsMap]) => buildYearGroup(year, monthsMap));
+
+  const recentYearCutoff = (Number(currentYear) - 3).toString();
+
+  // Last 3 years show ungrouped, older years are grouped into decades
+  const pastYears: YearGroup[] = [];
+  const byDecade = new Map<string, YearGroup[]>();
+
+  for (const yg of allPastYears) {
+    if (yg.year >= recentYearCutoff) {
+      pastYears.push(yg);
+    } else {
+      const decade = yg.year.slice(0, 3) + '0s';
+      if (!byDecade.has(decade)) byDecade.set(decade, []);
+      byDecade.get(decade)!.push(yg);
+    }
+  }
+
+  const decades: DecadeGroup[] = [...byDecade.entries()]
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([decade, years]) => ({
+      decade,
+      years,
+      totalCount: years.reduce((sum, y) => sum + y.totalCount, 0),
     }));
 
-  return { currentYearMonths, pastYears };
+  return { currentYearMonths, pastYears, decades };
 }
 
 // --- Collapsible section header ---
@@ -85,7 +114,7 @@ export function Sidebar() {
   const pastJournals = journals.filter(p => p.title !== todayTitle);
   const recentJournals = pastJournals.slice(0, 7);
   const olderJournals = pastJournals.slice(7);
-  const { currentYearMonths, pastYears } = groupOlderJournals(olderJournals);
+  const { currentYearMonths, pastYears, decades } = groupOlderJournals(olderJournals);
 
   const otherFolders = new Map<string, Page[]>();
   for (const p of pages) {
@@ -169,6 +198,9 @@ export function Sidebar() {
           ))}
           {pastYears.map(yg => (
             <YearGroupRow key={yg.year} group={yg} currentId={currentId} />
+          ))}
+          {decades.map(dg => (
+            <DecadeGroupRow key={dg.decade} group={dg} currentId={currentId} />
           ))}
         </>}
       </div>
@@ -273,30 +305,68 @@ function MonthGroupRow({ label, pages, currentId }: {
   );
 }
 
-function YearGroupRow({ group, currentId }: { group: YearGroup; currentId: string | null }) {
-  const hasActive = group.months.some(m => m.pages.some(p => p.id === currentId));
+function DecadeGroupRow({ group, currentId }: { group: DecadeGroup; currentId: string | null }) {
+  const hasActive = group.years.some(y => y.months.some(m => m.pages.some(p => p.id === currentId)));
   const [open, setOpen] = useState(hasActive);
   return (
     <div class="sidebar-year-group">
       <button class="sidebar-item sidebar-group-toggle" onClick={() => setOpen(!open)}>
         <span class="sidebar-group-arrow">{open ? <IconChevronDown /> : <IconChevronRight />}</span>
-        {group.year}
+        {group.decade}
         <span class="sidebar-group-count">{group.totalCount}</span>
       </button>
-      {open && group.months.map(month => (
-        <MonthInYear key={month.key} month={month} currentId={currentId} />
+      {open && group.years.map(yg => (
+        <YearGroupRow key={yg.year} group={yg} currentId={currentId} indent={1} />
       ))}
     </div>
   );
 }
 
-function MonthInYear({ month, currentId }: { month: MonthGroup; currentId: string | null }) {
+function YearGroupRow({ group, currentId, indent = 0 }: { group: YearGroup; currentId: string | null; indent?: number }) {
+  const hasActive = group.months.some(m => m.pages.some(p => p.id === currentId));
+  const [open, setOpen] = useState(hasActive);
+  const flat = indent > 0 || group.totalCount < 36;
+  const itemIndent = indent + 1;
+  return (
+    <div class="sidebar-year-group">
+      <button class={`sidebar-item sidebar-group-toggle${indent ? ` sidebar-indent-${indent}` : ''}`} onClick={() => setOpen(!open)}>
+        <span class="sidebar-group-arrow">{open ? <IconChevronDown /> : <IconChevronRight />}</span>
+        {group.year}
+        <span class="sidebar-group-count">{group.totalCount}</span>
+      </button>
+      {open && (flat
+        ? group.months.map(month => (
+            <div key={month.key}>
+              <div class={`sidebar-month-sep sidebar-indent-${itemIndent}`}>{month.monthName}</div>
+              {month.pages.map(page => (
+                <button
+                  key={page.id}
+                  class={`sidebar-item sidebar-item-icon sidebar-indent-${itemIndent} ${currentId === page.id ? 'active' : ''}`}
+                  onClick={() => navigateById(page.id)}
+                >
+                  <span class="sidebar-icon journal-icon"><IconCalendar /></span>
+                  {pageTitle(page.id)}
+                </button>
+              ))}
+            </div>
+          ))
+        : group.months.map(month => (
+            <MonthInYear key={month.key} month={month} currentId={currentId} indent={indent} />
+          ))
+      )}
+    </div>
+  );
+}
+
+function MonthInYear({ month, currentId, indent = 0 }: { month: MonthGroup; currentId: string | null; indent?: number }) {
   const hasActive = month.pages.some(p => p.id === currentId);
   const [open, setOpen] = useState(hasActive);
-  const shortLabel = month.label.split(' ')[0];
+  const shortLabel = month.monthName;
+  const toggleIndent = indent + 1;
+  const itemIndent = indent + 2;
   return (
     <div>
-      <button class="sidebar-item sidebar-group-toggle sidebar-indent-1" onClick={() => setOpen(!open)}>
+      <button class={`sidebar-item sidebar-group-toggle sidebar-indent-${toggleIndent}`} onClick={() => setOpen(!open)}>
         <span class="sidebar-group-arrow">{open ? <IconChevronDown /> : <IconChevronRight />}</span>
         {shortLabel}
         <span class="sidebar-group-count">{month.pages.length}</span>
@@ -304,7 +374,7 @@ function MonthInYear({ month, currentId }: { month: MonthGroup; currentId: strin
       {open && month.pages.map(page => (
         <button
           key={page.id}
-          class={`sidebar-item sidebar-item-icon sidebar-indent-2 ${currentId === page.id ? 'active' : ''}`}
+          class={`sidebar-item sidebar-item-icon sidebar-indent-${itemIndent} ${currentId === page.id ? 'active' : ''}`}
           onClick={() => navigateById(page.id)}
         >
           <span class="sidebar-icon journal-icon"><IconCalendar /></span>

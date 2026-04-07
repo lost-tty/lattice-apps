@@ -92,7 +92,7 @@ export function PageSection({ pageId, titleClickable }: { pageId: string; titleC
   }
 
   return (
-    <div class={`page-section ${debugPanel !== 'off' ? 'with-debug' : ''}`}>
+    <div class="page-section">
       <div class="page-section-main">
         <div class="page-toolbar">
           <button class="toolbar-btn" disabled={!canUndo()} onClick={() => undo()} title="Undo (⌘Z)"><IconUndo /></button>
@@ -104,6 +104,8 @@ export function PageSection({ pageId, titleClickable }: { pageId: string; titleC
           <button class="toolbar-btn" onClick={handleCopyMarkdown} title="Copy as Markdown"><IconCopy /></button>
           <button class="toolbar-btn" onClick={handleDownloadMarkdown} title="Download page as Markdown"><IconDownload /></button>
         </div>
+        {debugPanel === 'markdown' && <DebugPanel header="Markdown"><pre class="markdown-panel-content">{exportPage(pageId)}</pre></DebugPanel>}
+        {debugPanel === 'ast' && <DebugPanel header="AST"><ASTContent tree={tree} /></DebugPanel>}
         <PageTitleBlock
           pageId={pageId}
           titleClickable={titleClickable}
@@ -175,8 +177,6 @@ export function PageSection({ pageId, titleClickable }: { pageId: string; titleC
         </div>
         {backlinks.length > 0 && <BacklinksPanel backlinks={backlinks} />}
       </div>
-      {debugPanel === 'markdown' && <DebugPanel header="Markdown"><pre class="markdown-panel-content">{exportPage(pageId)}</pre></DebugPanel>}
-      {debugPanel === 'ast' && <DebugPanel header="AST"><ASTContent tree={tree} /></DebugPanel>}
     </div>
   );
 }

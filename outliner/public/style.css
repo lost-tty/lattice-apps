@@ -21,6 +21,7 @@
   --border: lch(80% 2% 248deg);
   --sidebar-border: lch(96% 1% 266deg);
   --bullet: lch(80% 2% 248deg);
+  --rule: lch(88% 1% 255deg);
 
   /* Highlight & semantic */
   --highlight: lch(91% 27% 91deg);
@@ -89,6 +90,7 @@
     --border: lch(30% 1% 87deg);
     --sidebar-border: lch(15% 0% 87deg);
     --bullet: lch(40% 1% 87deg);
+    --rule: lch(26% 1% 87deg);
 
     /* Semantic — keep hue identity */
     --highlight: lch(35% 20% 91deg);
@@ -302,6 +304,15 @@ body {
 
 .sidebar-indent-1 { padding-left: calc(8px + 16px); }
 .sidebar-indent-2 { padding-left: calc(8px + 32px); }
+.sidebar-indent-3 { padding-left: calc(8px + 48px); }
+
+.sidebar-month-sep {
+  font-size: 13px;
+  color: var(--sidebar-muted);
+  padding-top: 6px;
+  padding-bottom: 2px;
+  padding-right: 8px;
+}
 
 /* Tag cloud */
 .tag-cloud {
@@ -587,37 +598,31 @@ body {
 
 /* --- Page section (reusable per-page unit) --- */
 
-.page-section.with-debug {
-  display: flex;
-  gap: 0;
-}
 
-.page-section.with-debug .page-section-main {
-  flex: 1;
-  min-width: 0;
-}
 
 /* --- Debug panel (inline within each page section) --- */
 
 .debug-panel {
+  position: sticky;
+  float: right;
+  clear: right;
+  top: 32px;
   width: 380px;
-  flex-shrink: 0;
-  border-left: 1px solid var(--border);
+  max-height: 80vh;
+
   background: var(--sidebar-bg);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  max-height: 80vh;
+  z-index: 1;
 }
 
 .debug-panel-header {
   font-size: 11px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
   color: var(--text-muted);
   padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--sidebar-border);
 }
 
 .markdown-panel-content {
@@ -905,7 +910,7 @@ body {
 .block > hr {
   flex: 1;
   border: none;
-  border-top: 2px solid var(--border);
+  border-top: 1px solid var(--rule);
   margin: 0;
   cursor: pointer;
 }
@@ -1058,15 +1063,12 @@ s {
 
 .backlinks {
   padding-top: 24px;
-  border-top: 1px solid var(--border);
 }
 
 .backlinks h3 {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
   margin-bottom: 12px;
 }
 
