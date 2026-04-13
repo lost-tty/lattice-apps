@@ -1,5 +1,6 @@
-import { useRef, useState, useCallback, useLayoutEffect } from 'preact/hooks';
+import { useRef, useState, useCallback, useLayoutEffect, useEffect } from 'preact/hooks';
 import { getJournalPages } from './db';
+import { anchoredPageId, useEditorScrollHide } from './editorState';
 import { PageSection } from './PageSection';
 
 // How many journal days to load per batch (large enough to fill most viewports)
@@ -15,6 +16,8 @@ export function JournalView({ startPageId }: { startPageId: string }) {
   const anchorRef = useRef<HTMLDivElement>(null);
   const prevNewerCount = useRef(0);
 
+  useEditorScrollHide(scrollRef);
+
   const newerStart = Math.max(startIdx - newerCount, 0);
   const olderEnd = Math.min(startIdx + olderCount, allJournals.length);
   const visibleJournals = allJournals.slice(newerStart, olderEnd);
@@ -29,6 +32,29 @@ export function JournalView({ startPageId }: { startPageId: string }) {
     }
     prevNewerCount.current = newerCount;
   }, [newerCount]);
+
+  // Track which section is anchored at the top of the viewport, for the mobile topbar title.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const pick = () => {
+      const sections = el.querySelectorAll<HTMLElement>('[data-page-id]');
+      const rootTop = el.getBoundingClientRect().top;
+      let best: { id: string; y: number } | null = null;
+      for (const s of sections) {
+        const y = s.getBoundingClientRect().top - rootTop;
+        if (y <= 16 && (!best || y > best.y)) best = { id: s.dataset.pageId!, y };
+      }
+      if (best) anchoredPageId.value = best.id;
+    };
+    const observer = new IntersectionObserver(pick, { root: el, threshold: [0, 1] });
+    el.querySelectorAll('[data-page-id]').forEach(s => observer.observe(s));
+    pick();
+    return () => {
+      observer.disconnect();
+      anchoredPageId.value = null;
+    };
+  }, [visibleJournals.length]);
 
   // Load more on scroll (both directions).
   const onScroll = useCallback(() => {
@@ -46,7 +72,11 @@ export function JournalView({ startPageId }: { startPageId: string }) {
     <div class="editor" ref={scrollRef} onScroll={onScroll}>
       <div class="editor-main journal-view">
         {visibleJournals.map(page => (
-          <div key={page.id} ref={page.id === startPageId ? anchorRef : undefined}>
+          <div
+            key={page.id}
+            data-page-id={page.id}
+            ref={page.id === startPageId ? anchorRef : undefined}
+          >
             <PageSection pageId={page.id} titleClickable />
           </div>
         ))}

@@ -94,23 +94,25 @@ export function PageSection({ pageId, titleClickable }: { pageId: string; titleC
   return (
     <div class="page-section">
       <div class="page-section-main">
-        <div class="page-toolbar">
-          <button class="toolbar-btn" disabled={!canUndo()} onClick={() => undo()} title="Undo (⌘Z)"><IconUndo /></button>
-          <button class="toolbar-btn" disabled={!canRedo()} onClick={() => redo()} title="Redo (⌘⇧Z)"><IconRedo /></button>
-          <div class="toolbar-sep" />
-          <button class={`toolbar-btn${debugPanel === 'markdown' ? ' active' : ''}`} onClick={() => togglePanel('markdown')} title="Debug Markdown"><IconCode /></button>
-          <button class={`toolbar-btn${debugPanel === 'ast' ? ' active' : ''}`} onClick={() => togglePanel('ast')} title="Debug AST"><IconTree /></button>
-          <div class="toolbar-sep" />
-          <button class="toolbar-btn" onClick={handleCopyMarkdown} title="Copy as Markdown"><IconCopy /></button>
-          <button class="toolbar-btn" onClick={handleDownloadMarkdown} title="Download page as Markdown"><IconDownload /></button>
+        <div class="page-header">
+          <div class="page-toolbar">
+            <button class="toolbar-btn" disabled={!canUndo()} onClick={() => undo()} title="Undo (⌘Z)"><IconUndo /></button>
+            <button class="toolbar-btn" disabled={!canRedo()} onClick={() => redo()} title="Redo (⌘⇧Z)"><IconRedo /></button>
+            <div class="toolbar-sep" />
+            <button class={`toolbar-btn${debugPanel === 'markdown' ? ' active' : ''}`} onClick={() => togglePanel('markdown')} title="Debug Markdown"><IconCode /></button>
+            <button class={`toolbar-btn${debugPanel === 'ast' ? ' active' : ''}`} onClick={() => togglePanel('ast')} title="Debug AST"><IconTree /></button>
+            <div class="toolbar-sep" />
+            <button class="toolbar-btn" onClick={handleCopyMarkdown} title="Copy as Markdown"><IconCopy /></button>
+            <button class="toolbar-btn" onClick={handleDownloadMarkdown} title="Download page as Markdown"><IconDownload /></button>
+          </div>
+          <PageTitleBlock
+            pageId={pageId}
+            titleClickable={titleClickable}
+            hasIncompleteTodosOnPage={hasPageIncompleteTodos}
+          />
         </div>
         {debugPanel === 'markdown' && <DebugPanel header="Markdown"><pre class="markdown-panel-content">{exportPage(pageId)}</pre></DebugPanel>}
         {debugPanel === 'ast' && <DebugPanel header="AST"><ASTContent tree={tree} /></DebugPanel>}
-        <PageTitleBlock
-          pageId={pageId}
-          titleClickable={titleClickable}
-          hasIncompleteTodosOnPage={hasPageIncompleteTodos}
-        />
         <div class="block-tree">
           {renderBlockList(flat)}
           <div

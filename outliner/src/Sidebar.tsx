@@ -102,7 +102,7 @@ function SectionHeader({ title, open, onToggle, count }: {
 
 // --- Main Sidebar ---
 
-export function Sidebar() {
+export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const pages = pageList.value;
   const currentId = currentPage.value;
   const todayTitle = todaySlug();
@@ -168,6 +168,17 @@ export function Sidebar() {
   return (
     <nav
       class={`sidebar${dragging ? ' drop-active' : ''}`}
+      onClick={(e: MouseEvent) => {
+        const t = e.target as HTMLElement;
+        // `.sidebar-item-row` catches padding clicks next to a page row so
+        // they still dismiss the drawer, matching the implicit contract of
+        // "tap anything page-row-ish closes the sidebar".
+        if (t.closest(
+          '.sidebar-item:not(.sidebar-group-toggle), .sidebar-item-row, .tag-cloud-item, .sidebar-add',
+        )) {
+          onNavigate?.();
+        }
+      }}
       onDragOver={(e: Event) => { (e as DragEvent).preventDefault(); setDragging(true); }}
       onDragLeave={() => setDragging(false)}
       onDrop={(e: Event) => handleFileDrop(e as DragEvent)}
