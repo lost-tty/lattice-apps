@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "cp -r public/* dist/ && esbuild src/main.tsx --bundle --outfile=dist/bundle.js --format=iife --target=es2020 --minify --jsx=automatic --jsx-import-source=preact",
-    "watch": "cp -r public/* dist/ && esbuild src/main.tsx --bundle --outfile=dist/bundle.js --format=iife --target=es2020 --watch --jsx=automatic --jsx-import-source=preact",
-    "dev": "cp -r public/* dist/ && cp dist/dev.html dist/index.html && esbuild src/dev.tsx --bundle --outfile=dist/bundle.js --format=iife --target=es2020 --watch --servedir=dist --jsx=automatic --jsx-import-source=preact",
+    "build": "cp -r public/* dist/ && cp ../ui/src/styles.css dist/ui.css && NODE_PATH=./node_modules esbuild src/main.tsx --bundle --outfile=dist/bundle.js --format=iife --target=es2020 --minify --jsx=automatic --jsx-import-source=preact --alias:@ui=../ui/src",
+    "watch": "cp -r public/* dist/ && cp ../ui/src/styles.css dist/ui.css && NODE_PATH=./node_modules esbuild src/main.tsx --bundle --outfile=dist/bundle.js --format=iife --target=es2020 --watch --jsx=automatic --jsx-import-source=preact --alias:@ui=../ui/src",
+    "dev": "cp -r public/* dist/ && cp ../ui/src/styles.css dist/ui.css && cp dist/dev.html dist/index.html && NODE_PATH=./node_modules esbuild src/dev.tsx --bundle --outfile=dist/bundle.js --format=iife --target=es2020 --watch --servedir=dist --jsx=automatic --jsx-import-source=preact --alias:@ui=../ui/src",
     "bundle": "npm run build && cd dist && zip -qr ../outliner.lattice .",
     "test": "vitest run"
   },

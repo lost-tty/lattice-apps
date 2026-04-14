@@ -1,0 +1,216 @@
+/* @lattice/ui — component styles
+ *
+ * Shipped alongside the components. The consuming app is responsible for
+ * providing the following CSS custom properties at :root:
+ *   --bg            --border         --backdrop      --shadow-lg
+ *   --text          --text-muted     --text-faint
+ *   --active-bg     --block-hover    --link          --link-bg
+ *   --delete-hover  --rule
+ *
+ * Component-emitted classes styled here: .toolbar(-*), .action-menu(-*),
+ * .swipe-row(-*). Consumer-passed classes (e.g. `page-toolbar` via the
+ * `class` prop) stay with the consumer's CSS.
+ */
+
+/* --- Toolbar --- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.toolbar-btn {
+  all: unset;
+  cursor: pointer;
+  color: var(--text-faint);
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toolbar-btn:hover:not(:disabled) {
+  color: var(--text-muted);
+  background: var(--border);
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.toolbar-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.toolbar-btn.active {
+  color: var(--link);
+  background: var(--link-bg);
+}
+
+.toolbar-btn-danger {
+  color: var(--delete-hover);
+}
+
+.toolbar-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 2px;
+}
+
+/* --- Action menu (popover on desktop, bottom sheet on mobile) --- */
+
+.action-menu-root {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.action-menu-backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.action-menu {
+  position: absolute;
+  top: var(--action-menu-y);
+  left: var(--action-menu-x);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 4px 12px var(--shadow-lg);
+  min-width: 10rem;
+  pointer-events: auto;
+}
+
+.action-menu-item {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+
+.action-menu-item:hover {
+  background: var(--active-bg);
+}
+
+.action-menu-item-danger {
+  color: var(--delete-hover);
+}
+
+.action-menu-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.action-menu-item-danger .action-menu-icon {
+  color: var(--delete-hover);
+}
+
+.action-menu-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.action-menu-label {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .action-menu-backdrop {
+    background: var(--backdrop);
+    pointer-events: auto;
+  }
+
+  .action-menu {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border: none;
+    border-top: 1px solid var(--border);
+    border-radius: 14px 14px 0 0;
+    padding: 8px 8px calc(12px + env(safe-area-inset-bottom));
+    min-width: 0;
+    box-shadow: 0 -4px 20px var(--shadow-lg);
+  }
+
+  .action-menu-item {
+    padding: 14px 12px;
+    font-size: 16px;
+    text-align: center;
+  }
+
+  .action-menu-item + .action-menu-item {
+    border-top: 1px solid var(--rule);
+  }
+}
+
+/* --- Swipe row (iOS Mail / Reminders pattern) --- */
+
+.swipe-row {
+  position: relative;
+  overflow: hidden;
+}
+
+.swipe-row-content {
+  position: relative;
+  z-index: 2;
+  background: var(--bg);
+  transition: transform 0.2s ease;
+}
+
+.swipe-row-content.swipe-row-dragging {
+  transition: none;
+}
+
+.swipe-row-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  z-index: 1;
+}
+
+.swipe-row-action {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: white;
+  background: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.swipe-row-action svg {
+  width: 22px;
+  height: 22px;
+  stroke: currentColor;
+}
+
+.swipe-row-action-danger {
+  background: var(--delete-hover);
+}

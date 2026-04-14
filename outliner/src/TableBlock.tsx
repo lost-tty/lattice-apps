@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState } from 'preact/hooks';
 import { Content } from './renderContent';
-import { ContextMenu, type MenuState } from './ContextMenu';
+import { ActionMenu, type ActionMenuState } from '@ui';
 import type { FlatBlock } from './db';
 import type { Block } from './types';
 import {
@@ -22,14 +22,14 @@ export function TableBlock({ node }: { node: FlatBlock }) {
   if (grid.length === 0) return null;
 
   const colOrders = grid[0].cells.map(c => c.col ?? 0);
-  const [menu, setMenu] = useState<MenuState>(null);
+  const [menu, setMenu] = useState<ActionMenuState | null>(null);
 
   function onRowContext(e: MouseEvent, rowOrder: number) {
     e.preventDefault();
     setMenu({
       x: e.clientX, y: e.clientY,
       items: [
-        { label: 'Insert row above', action: () => {
+        { label: 'Insert row above', onAction: () => {
           const g = getTableGrid(node.id);
           const idx = g.findIndex(r => r.order === rowOrder);
           const prev = g[idx - 1];
@@ -40,8 +40,8 @@ export function TableBlock({ node }: { node: FlatBlock }) {
             reorderTableRow(node.id, newGrid[newGrid.length - 1].order, rowOrder, 'before');
           }
         }},
-        { label: 'Insert row below', action: () => insertTableRow(node.id, rowOrder) },
-        { label: 'Delete row', action: () => deleteTableRow(node.id, rowOrder) },
+        { label: 'Insert row below', onAction: () => insertTableRow(node.id, rowOrder) },
+        { label: 'Delete row', danger: true, onAction: () => deleteTableRow(node.id, rowOrder) },
       ],
     });
   }
@@ -51,7 +51,7 @@ export function TableBlock({ node }: { node: FlatBlock }) {
     setMenu({
       x: e.clientX, y: e.clientY,
       items: [
-        { label: 'Insert column left', action: () => {
+        { label: 'Insert column left', onAction: () => {
           const g = getTableGrid(node.id);
           const cols = g[0].cells.map(c => c.col ?? 0);
           const idx = cols.indexOf(colOrder);
@@ -64,8 +64,8 @@ export function TableBlock({ node }: { node: FlatBlock }) {
             reorderTableCol(node.id, lastCol, colOrder, 'before');
           }
         }},
-        { label: 'Insert column right', action: () => insertTableCol(node.id, colOrder) },
-        { label: 'Delete column', action: () => deleteTableCol(node.id, colOrder) },
+        { label: 'Insert column right', onAction: () => insertTableCol(node.id, colOrder) },
+        { label: 'Delete column', danger: true, onAction: () => deleteTableCol(node.id, colOrder) },
       ],
     });
   }
@@ -207,7 +207,7 @@ export function TableBlock({ node }: { node: FlatBlock }) {
         )}
       </div>
       <div class="table-add-col" onClick={() => insertTableCol(node.id)} title="Add column">+</div>
-      <ContextMenu menu={menu} onClose={() => setMenu(null)} />
+      <ActionMenu menu={menu} onClose={() => setMenu(null)} />
     </div>
   );
 }

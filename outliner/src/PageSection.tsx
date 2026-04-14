@@ -1,18 +1,18 @@
-import { useState } from 'preact/hooks';
 import type { FlatBlock } from './db';
 import type { Block } from './types';
-import { IconCopy, IconDownload, IconCode, IconTree, IconUndo, IconRedo } from './Icons';
+import { Toolbar } from '@ui';
 import {
   activeBlockId, blockData,
   buildTree, flattenTree, saveBlock,
-  getBacklinks, pageTitle, navigateById,
+  getBacklinks, navigateById,
 } from './db';
-import { beginUndo, commitUndo, canUndo, canRedo, undo, redo } from './undo';
+import { beginUndo, commitUndo } from './undo';
 import { parseHeading, parseAnnotations } from './parse';
 import { createBlockAfter, hasIncompleteTodos } from './blockOps';
 import { getTableGrid } from './table';
 import { exportPage } from './importExport';
-import { activateBlock, collectDescendantIds } from './editorState';
+import { activateBlock, collectDescendantIds, debugPanels } from './editorState';
+import { buildPageToolbarGroups, debugPanelFor } from './pageActions';
 import { BlockItem } from './BlockItem';
 import { TableBlock } from './TableBlock';
 import { KanbanBoard } from './KanbanBoard';
@@ -68,51 +68,25 @@ export function PageSection({ pageId, titleClickable }: { pageId: string; titleC
   const backlinks = getBacklinks(pageId);
   const hasPageIncompleteTodos = flat.some(b => hasIncompleteTodos(b.id));
 
-  const [debugPanel, setDebugPanel] = useState<'off' | 'markdown' | 'ast'>('off');
-
-  function togglePanel(panel: 'markdown' | 'ast') {
-    setDebugPanel(prev => prev === panel ? 'off' : panel);
-  }
-
-  function handleCopyMarkdown() {
-    const md = exportPage(pageId);
-    navigator.clipboard.writeText(md);
-  }
-
-  function handleDownloadMarkdown() {
-    const md = exportPage(pageId);
-    const title = pageTitle(pageId);
-    const blob = new Blob([md], { type: 'text/markdown' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${title}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
+  // Both the inline toolbar (here) and the mobile topbar toolbar (rendered
+  // by App) call the same builder; debug-panel state lives on the
+  // `debugPanels` signal so toggling from either surface updates both.
+  // Reading `debugPanelFor` subscribes this component to the signal so
+  // toggles re-render the inline toolbar without extra plumbing.
+  const debugPanel = debugPanelFor(pageId);
+  const toolbarGroups = buildPageToolbarGroups(pageId);
 
   return (
     <div class="page-section">
       <div class="page-section-main">
-        <div class="page-header">
-          <div class="page-toolbar">
-            <button class="toolbar-btn" disabled={!canUndo()} onClick={() => undo()} title="Undo (⌘Z)"><IconUndo /></button>
-            <button class="toolbar-btn" disabled={!canRedo()} onClick={() => redo()} title="Redo (⌘⇧Z)"><IconRedo /></button>
-            <div class="toolbar-sep" />
-            <button class={`toolbar-btn${debugPanel === 'markdown' ? ' active' : ''}`} onClick={() => togglePanel('markdown')} title="Debug Markdown"><IconCode /></button>
-            <button class={`toolbar-btn${debugPanel === 'ast' ? ' active' : ''}`} onClick={() => togglePanel('ast')} title="Debug AST"><IconTree /></button>
-            <div class="toolbar-sep" />
-            <button class="toolbar-btn" onClick={handleCopyMarkdown} title="Copy as Markdown"><IconCopy /></button>
-            <button class="toolbar-btn" onClick={handleDownloadMarkdown} title="Download page as Markdown"><IconDownload /></button>
-          </div>
-          <PageTitleBlock
-            pageId={pageId}
-            titleClickable={titleClickable}
-            hasIncompleteTodosOnPage={hasPageIncompleteTodos}
-          />
-        </div>
+        <Toolbar groups={toolbarGroups} class="page-toolbar" />
         {debugPanel === 'markdown' && <DebugPanel header="Markdown"><pre class="markdown-panel-content">{exportPage(pageId)}</pre></DebugPanel>}
         {debugPanel === 'ast' && <DebugPanel header="AST"><ASTContent tree={tree} /></DebugPanel>}
+        <PageTitleBlock
+          pageId={pageId}
+          titleClickable={titleClickable}
+          hasIncompleteTodosOnPage={hasPageIncompleteTodos}
+        />
         <div class="block-tree">
           {renderBlockList(flat)}
           <div

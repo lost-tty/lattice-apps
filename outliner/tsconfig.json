@@ -9,7 +9,12 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "jsx": "react-jsx",
-    "jsxImportSource": "preact"
+    "jsxImportSource": "preact",
+    "baseUrl": ".",
+    "paths": {
+      "@ui": ["../ui/src/index.ts"],
+      "@ui/*": ["../ui/src/*"]
+    }
   },
-  "include": ["src", "test"]
+  "include": ["src", "test", "../ui/src"]
 }

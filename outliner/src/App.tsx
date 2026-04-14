@@ -1,11 +1,13 @@
 // Lattice Outliner — App shell
 
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { Toolbar } from '@ui';
 import { Sidebar } from './Sidebar';
 import { Editor } from './Editor';
 import { IconMenu } from './Icons';
 import { currentPage, pageTitle } from './db';
 import { anchoredPageId, topbarSlide } from './editorState';
+import { buildPageToolbarGroups } from './pageActions';
 
 export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -14,6 +16,7 @@ export function App() {
 
   const titleId = anchoredPageId.value ?? currentPage.value;
   const title = titleId ? pageTitle(titleId) : '';
+  const toolbarGroups = titleId ? buildPageToolbarGroups(titleId) : [];
 
   // Progressive topbar slide: CSS uses `--topbar-slide` to drive translate-Y.
   // Forced to 0 when the sidebar is open so the close affordance is reachable.
@@ -53,6 +56,7 @@ export function App() {
           <IconMenu />
         </button>
         <span class="topbar-title">{title}</span>
+        <Toolbar groups={toolbarGroups} class="topbar-actions" />
       </header>
       <div class="sidebar-backdrop" onClick={close} />
       <Sidebar onNavigate={close} />

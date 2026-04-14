@@ -81,6 +81,23 @@ export const IconMenu = () => (
   </svg>
 );
 
+export const IconTrash = () => (
+  <svg {...props}>
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    <path d="M10 11v6" />
+    <path d="M14 11v6" />
+    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+  </svg>
+);
+
+export const IconArrowRight = () => (
+  <svg {...props}>
+    <line x1="5" y1="12" x2="19" y2="12" />
+    <polyline points="12 5 19 12 12 19" />
+  </svg>
+);
+
 export const IconCode = () => (
   <svg {...props}>
     <polyline points="16 18 22 12 16 6" />

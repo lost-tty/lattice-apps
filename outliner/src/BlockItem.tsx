@@ -1,6 +1,7 @@
 import { useRef, useLayoutEffect, useState } from 'preact/hooks';
 import { Content } from './renderContent';
-import { ContextMenu, type MenuState } from './ContextMenu';
+import { ActionMenu, SwipeRow, useLongPress, type ActionItem, type ActionMenuState } from '@ui';
+import { IconTrash, IconArrowRight } from './Icons';
 import type { FlatBlock } from './db';
 import {
   activeBlockId, blockData, pageData,
@@ -302,41 +303,59 @@ export function BlockItem({ node }: { node: FlatBlock }) {
   const { status, text: statusText } = parseTodoStatus(node.content);
   const { level, text: headingText } = parseHeading(statusText);
 
-  // --- Context menu ---
+  // --- Block actions (used by context menu, long-press, and swipe) ---
 
-  const [menu, setMenu] = useState<MenuState>(null);
+  const [menu, setMenu] = useState<ActionMenuState | null>(null);
+  const blockRef = useRef<HTMLDivElement>(null);
 
-  function handleContextMenu(e: MouseEvent) {
-    e.preventDefault();
-    const items: Array<{ label: string; action: () => void }> = [];
-
+  /** Single source of truth for per-block actions. Each surface
+   *  (right-click menu, long-press menu, swipe-left buttons) renders the
+   *  same list, with the same conditional inclusion of carry-forward. */
+  function buildActions(): ActionItem[] {
+    const items: ActionItem[] = [];
     if (hasIncompleteTodos(node.id)) {
       const today = todaySlug();
       const todayPage = Object.values(pageData.value).find(p => p.title === today);
       const isOnToday = todayPage && node.pageId === todayPage.id;
       if (!isOnToday) {
         items.push({
-          label: 'carry forward to today',
-          action: () => {
+          label: 'Carry forward to today',
+          icon: <IconArrowRight />,
+          onAction: () => {
             const targetPageId = getOrCreatePage(today, 'journals');
             carryForward(node.id, targetPageId);
           },
         });
       }
     }
-
     items.push({
-      label: 'delete block',
-      action: () => {
+      label: 'Delete',
+      icon: <IconTrash />,
+      danger: true,
+      onAction: () => {
         beginUndo('delete block');
         deleteBlock(node.id);
         commitUndo();
         activeBlockId.value = null;
       },
     });
+    return items;
+  }
 
+  function handleContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    const items = buildActions();
     if (items.length > 0) setMenu({ x: e.clientX, y: e.clientY, items });
   }
+
+  // Long-press anywhere on a non-editing block opens the same menu.
+  // (When the block is in edit mode iOS owns long-press for text selection,
+  // and we render without this hook attached.) Targets the whole block so
+  // users don't have to hit the small left gutter.
+  useLongPress(blockRef, ({ clientX, clientY }) => {
+    const items = buildActions();
+    if (items.length > 0) setMenu({ x: clientX, y: clientY, items });
+  });
 
   // --- Render ---
   const viewText = level ? parseAnnotations(headingText).text : headingText;
@@ -350,8 +369,9 @@ export function BlockItem({ node }: { node: FlatBlock }) {
 
   const visualDepth = getVisualDepth(node);
 
-  return (
+  const blockInner = (
     <div
+      ref={blockRef}
       class="block"
       style={isHr && !isActive ? '--depth: 0' : `--depth: ${visualDepth}`}
       onContextMenu={(e: Event) => handleContextMenu(e as MouseEvent)}
@@ -389,7 +409,19 @@ export function BlockItem({ node }: { node: FlatBlock }) {
           )}
         </div>
       )}
-      <ContextMenu menu={menu} onClose={() => setMenu(null)} />
     </div>
+  );
+
+  // Only wrap in SwipeRow when not actively editing — horizontal swipes
+  // inside a contenteditable conflict with iOS's text cursor gestures.
+  // ActionMenu is rendered as a sibling, *outside* SwipeRow, because
+  // SwipeRow's `transform` on `.swipe-row-content` creates a containing
+  // block that traps `position: fixed` and the menu would otherwise be
+  // clipped by `.swipe-row { overflow: hidden }`.
+  return (
+    <>
+      {isActive ? blockInner : <SwipeRow actions={buildActions()}>{blockInner}</SwipeRow>}
+      <ActionMenu menu={menu} onClose={() => setMenu(null)} />
+    </>
   );
 }

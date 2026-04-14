@@ -488,32 +488,10 @@ body {
 }
 
 /* Context menu */
-.context-menu {
-  position: fixed;
-  z-index: 100;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 4px;
-  box-shadow: 0 4px 12px var(--shadow-lg);
-  min-width: 10rem;
-}
-
-.context-menu-item {
-  all: unset;
-  display: block;
-  width: 100%;
-  padding: 6px 10px;
-  font-size: 13px;
-  color: var(--text);
-  cursor: pointer;
-  border-radius: 4px;
-  box-sizing: border-box;
-}
-
-.context-menu-item:hover {
-  background: var(--active-bg);
-}
+/* Styles for ActionMenu / SwipeRow / Toolbar ship with @lattice/ui
+   (see ui/src/styles.css, imported via the @lattice-ui.css link in
+   index.html). App-scoped classes (`.page-toolbar`, `.topbar-actions`)
+   remain in this file. */
 
 .outline-table {
   border-spacing: 0;
@@ -643,11 +621,6 @@ body {
   flex: 1;
 }
 
-.toolbar-btn.active {
-  color: var(--link);
-  background: var(--link-bg);
-}
-
 /* --- AST debug panel --- */
 
 .ast-tree {
@@ -702,54 +675,14 @@ body {
   visibility: hidden;
 }
 
-/* Header wraps title + toolbar. Default is display:contents so the wrapper
-   is transparent and desktop layout is unaffected. The mobile @media block
-   turns it into a flex row. */
-.page-header {
-  display: contents;
-}
-
+/* `.toolbar-btn` / `.toolbar-sep` / base `.toolbar` come from @lattice/ui.
+   Here we only add the app-specific positioning: the page-level toolbar
+   floats right and sticks at the top of the scroll container on desktop. */
 .page-toolbar {
   position: sticky;
   top: 0;
   float: right;
-  display: flex;
-  align-items: center;
-  gap: 2px;
   z-index: 2;
-}
-
-.toolbar-btn {
-  all: unset;
-  cursor: pointer;
-  color: var(--text-faint);
-  padding: 4px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.toolbar-btn:hover:not(:disabled) {
-  color: var(--text-muted);
-  background: var(--border);
-}
-
-.toolbar-btn:disabled {
-  opacity: 0.3;
-  cursor: default;
-}
-
-.toolbar-btn svg {
-  width: 16px;
-  height: 16px;
-}
-
-.toolbar-sep {
-  width: 1px;
-  height: 16px;
-  background: var(--border);
-  margin: 0 2px;
 }
 
 /* --- Block --- */
@@ -1288,6 +1221,7 @@ s {
 
 .topbar { display: none; }
 .sidebar-backdrop { display: none; }
+.topbar-actions { display: none; }
 
 @media (max-width: 640px) {
   .topbar {
@@ -1384,25 +1318,57 @@ s {
     padding: 24px 16px;
   }
 
-  /* Lay the header as a flex row so the title (left) and toolbar (right)
-     sit on one line. Desktop keeps `display: contents` (see below), so the
-     wrapper only has layout effects at this breakpoint. */
-  .page-header {
-    display: flex;
-    flex-direction: row-reverse;
-    align-items: center;
-    gap: 8px;
-  }
+  /* Page-level toolbar lives in the topbar on mobile (see topbar-actions),
+     so the inline page-toolbar is hidden. With it hidden, the header
+     wrapper stays `display: contents` — no flex re-layout needed. */
 
-  .page-header .page-title-block {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .page-toolbar {
-    float: none;
+  /* Debug panel: drop the desktop float/width so it renders as a full-width
+     inline block below the title rather than overflowing the viewport. */
+  .debug-panel {
     position: static;
-    justify-content: flex-end;
+    float: none;
+    clear: none;
+    width: auto;
+    max-height: 60vh;
+  }
+
+  /* No hover on touch devices — gutter (drag handle / collapse chevron)
+     would be invisible. Show it always at this breakpoint. */
+  .gutter {
+    opacity: 1;
+  }
+
+  /* Suppress iOS text selection / callout on non-editing blocks so that
+     long-press fires our context menu instead of triggering the system's
+     loupe and selection UI. The active editing surface re-enables it. */
+  .block {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  .block-content.editing {
+    -webkit-touch-callout: default;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  /* Page-level actions move into the topbar at this breakpoint.
+     Inline page-toolbar is hidden; topbar-actions takes over. */
+  .page-toolbar {
+    display: none;
+  }
+
+  .topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+    overflow-x: auto;
+  }
+
+  .topbar-actions .toolbar-btn {
+    flex-shrink: 0;
   }
 }
 

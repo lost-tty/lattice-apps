@@ -24,6 +24,15 @@ export const shared = {
  *  view has a single page. The mobile topbar reads this for its title. */
 export const anchoredPageId = signal<string | null>(null);
 
+/** Debug-panel state keyed by pageId. Shared across the inline toolbar
+ *  (rendered by PageSection) and the mobile topbar toolbar (rendered by
+ *  App), so both toggle the same panel without needing to pipe state
+ *  through a registry. `'off'` / missing means no panel is open.
+ *  Persists across page navigation — reopening a page restores its
+ *  previously-visible debug panel. */
+export type DebugPanelKind = 'off' | 'markdown' | 'ast';
+export const debugPanels = signal<Record<string, DebugPanelKind>>({});
+
 /** How far (in px) the mobile topbar is slid up. 0 = fully visible;
  *  equal to the topbar's height = fully hidden. Derived from scroll deltas
  *  (not raw scrollTop) so the bar reveals as soon as the user starts
