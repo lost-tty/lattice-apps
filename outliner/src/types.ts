@@ -34,12 +34,17 @@ export interface Page {
 
 export interface Block {
   id: string;
+  /** Full markdown syntax: "- foo" for bullets, "# H" for headings,
+   *  "- [ ] task" for todos, "---" for hrule, bare text for paragraphs.
+   *  Indentation is not part of content — it's derived from the tree. */
   content: string;
   pageId: string;
   parent: string | null;
   order: number;
-  type?: 'bullet' | 'paragraph' | 'table';  // default: 'bullet'
-  col?: number;   // column position for table cell blocks (fractional)
+  /** Structural layout of the block's children. Currently only `'grid'`
+   *  (the container's children are table cells positioned by `col`). */
+  layout?: 'grid';
+  col?: number;   // column position for grid cell blocks (fractional)
   collapsed?: boolean;
   createdAt?: string;
   updatedAt?: string;

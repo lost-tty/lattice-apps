@@ -67,7 +67,7 @@ let groupPageId = '';
 function recordPatch(id: string, before: Block | null, after: Block | null) {
   if (before && after &&
     before.content === after.content &&
-    before.type === after.type &&
+    before.layout === after.layout &&
     before.parent === after.parent &&
     before.order === after.order &&
     before.col === after.col) return;

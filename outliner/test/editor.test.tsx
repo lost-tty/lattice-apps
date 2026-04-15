@@ -4,9 +4,22 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render } from 'preact';
 import { createMockStore } from '../src/mock-sdk';
 import {
-  init, reset, getOrCreatePage, saveBlock, blockData,
+  init, reset, getOrCreatePage, saveBlock as _rawSaveBlock, blockData,
   activeBlockId, currentPage,
 } from '../src/db';
+
+/** Test-only wrapper: pre-v2 fixtures get migrated inline so tests keep
+ *  working. See the identical wrapper in test/db.test.ts for rationale. */
+function saveBlock(block: any) {
+  const { type, content = '', layout, ...rest } = block;
+  if (type === 'table') return _rawSaveBlock({ ...rest, content, layout: 'grid' });
+  if (type === 'paragraph') return _rawSaveBlock({ ...rest, content, layout });
+  const alreadyMigrated =
+    content === '' || content === '- ' || content.startsWith('- ') ||
+    /^#{1,6} /.test(content) || content === '---';
+  const nextContent = alreadyMigrated ? content : '- ' + content;
+  return _rawSaveBlock({ ...rest, content: nextContent, layout });
+}
 import { createBlockAfter, joinBlockWithPrevious } from '../src/blockOps';
 import { continuationContent } from '../src/editorState';
 import { Editor } from '../src/Editor';
@@ -90,7 +103,7 @@ describe('Editor focus', () => {
 
     const mergedDiv = document.querySelector('.block-content.editing') as HTMLElement;
     expect(mergedDiv).not.toBeNull();
-    expect(blockData.value['1'].content).toBe('helloworld');
+    expect(blockData.value['1'].content).toBe('- helloworld');
     expect(mergedDiv.textContent).toBe('- helloworld');
     expect(document.activeElement).toBe(mergedDiv);
   });
@@ -107,10 +120,10 @@ describe('Editor focus', () => {
     const editDiv = document.querySelector('.block-content.editing') as HTMLElement;
     expect(editDiv).not.toBeNull();
 
-    // Simulate Enter at offset 7 (after "- hello")
+    // Simulate Enter at offset 7 (after "- hello"): new block gets bullet + space + "world".
     editDiv.textContent = '- hello';
     saveBlock({ ...blockData.value['1'], content: 'hello' });
-    const newId = createBlockAfter('1', ' world');
+    const newId = createBlockAfter('1', '-  world');
     activeBlockId.value = newId;
 
     editDiv.dispatchEvent(new Event('blur'));

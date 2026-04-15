@@ -10,7 +10,7 @@ import {
   navigateTo, getOrCreatePage,
 } from './db';
 import { beginUndo, commitUndo, undo, redo } from './undo';
-import { parseHeading, parseAnnotations, parseTodoStatus, cycleTodoStatus, parseTableCells, todaySlug } from './parse';
+import { classifyBlock, parseHeading, parseAnnotations, cycleTodoStatus, parseTableCells, todaySlug } from './parse';
 import { createBlockAfter, createChildBlock, indentBlock, outdentBlock, removeBlock, joinBlockWithPrevious, moveBlock, isDescendant, carryForward, hasIncompleteTodos } from './blockOps';
 import { createTable, insertTableRow } from './table';
 import { parseMarkdownToItems, insertBlocksAfter } from './importExport';
@@ -38,18 +38,18 @@ export function BlockItem({ node }: { node: FlatBlock }) {
 
   /** Parse editor text back to block fields and save. */
   function saveFromEditor() {
-    const { type, content } = markdownToBlock(ref.current?.textContent || '');
+    const { content } = markdownToBlock(ref.current?.textContent || '');
     const current = blockData.value[node.id];
     if (!current) return;
-    if (content !== current.content || type !== current.type) {
-      saveBlock({ ...current, content, type });
+    if (content !== current.content) {
+      saveBlock({ ...current, content });
     }
   }
 
   function handleKeyDown(e: KeyboardEvent) {
     const el = ref.current!;
     const rawText = el.textContent || '';
-    const { type: parsedType, content } = markdownToBlock(rawText);
+    const { content } = markdownToBlock(rawText);
     const prefixLen = rawText.length - content.length;
 
     // Undo / Redo
@@ -78,28 +78,44 @@ export function BlockItem({ node }: { node: FlatBlock }) {
       const before = content.slice(0, contentOffset);
       const after = content.slice(contentOffset);
 
+      // Is the block we're splitting a bullet? Its tail/new sibling has to
+      // carry the bullet prefix or it'll be classified as a paragraph.
+      const isBulletBlock = classifyBlock(content).kind === 'bullet';
+      const asBullet = (text: string) => {
+        const stripped = text.startsWith('- ') ? text.slice(2) : text;
+        return '- ' + stripped;
+      };
+
       if (before === '') {
         beginUndo('split block');
-        saveBlock({ ...node, content: '', type: 'paragraph' });
-        const newId = createBlockAfter(node.id, content, parsedType);
+        // Current becomes an empty block of the same kind so the outline
+        // shape doesn't change. Bullets stay bullets (empty `- `).
+        saveBlock({ ...node, content: isBulletBlock ? '- ' : '' });
+        const newId = createBlockAfter(node.id, content);
         commitUndo();
         activateBlock(newId, 'start');
         return;
       }
 
       beginUndo('split block');
-      saveBlock({ ...node, content: before, type: parsedType });
+      saveBlock({ ...node, content: before });
 
       const { level } = parseHeading(before);
       if (level) {
-        const newId = createChildBlock(node.id, after);
+        // Splitting a heading: the tail becomes a child bullet, not a raw
+        // paragraph, so the heading gets a proper first list item.
+        const childContent = after ? asBullet(after) : '- ';
+        const newId = createChildBlock(node.id, childContent);
         commitUndo();
         activateBlock(newId, 'start');
         return;
       }
 
-      const newContent = after || continuationContent(node);
-      const newId = createBlockAfter(node.id, newContent, parsedType);
+      // Normal split: sibling of same kind. Bullets inherit bullet prefix;
+      // paragraphs stay bare.
+      const tail = after || continuationContent(node);
+      const newContent = isBulletBlock ? asBullet(tail) : tail;
+      const newId = createBlockAfter(node.id, newContent);
       commitUndo();
       activateBlock(newId, newContent ? 'end' : 'start');
       return;
@@ -298,10 +314,11 @@ export function BlockItem({ node }: { node: FlatBlock }) {
 
   // --- Parsed block metadata ---
 
-  const isPara = node.type === 'paragraph';
   const collapsed = hasKids && isCollapsed(node.id);
-  const { status, text: statusText } = parseTodoStatus(node.content);
-  const { level, text: headingText } = parseHeading(statusText);
+  const kind = classifyBlock(node.content);
+  const level = kind.kind === 'heading' ? kind.level : null;
+  const status = kind.kind === 'bullet' ? kind.todo?.status ?? null : null;
+  const headingText = 'text' in kind ? kind.text : '';
 
   // --- Block actions (used by context menu, long-press, and swipe) ---
 
@@ -401,7 +418,7 @@ export function BlockItem({ node }: { node: FlatBlock }) {
         />
       ) : (
         <div key="view" class={contentClass} onClick={handleClick}>
-          {!isPara && <span class="bullet-marker" />}
+          {kind.kind === 'bullet' && <span class="bullet-marker" />}
           {status && <span class={`todo-marker ${status}`} />}
           <span><Content text={viewText} fallback={<br />} /></span>
           {collapsed && (

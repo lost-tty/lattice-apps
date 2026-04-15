@@ -105,18 +105,21 @@ export function moveBlock(
 
 // --- Block creation ---
 
+/** Default content for a newly created block: an empty bullet. Callers
+ *  may pass any markdown (`# H`, bare prose, etc.) — the kind is derived
+ *  from the prefix. */
+const DEFAULT_NEW_CONTENT = '- ';
+
 /** Create a new block after `afterId`, returns the new block's ID.
  *  If the level contains headings and the new block is not a heading,
  *  it becomes a child of the anchor instead of a sibling. */
-export function createBlockAfter(afterId: string, content: string = '', type?: 'bullet' | 'paragraph'): string {
+export function createBlockAfter(afterId: string, content: string = DEFAULT_NEW_CONTENT): string {
   const after = blockData.value[afterId];
   if (!after) return '';
-  const blockType = type ?? after.type ?? 'bullet';
 
-  // Build a provisional block to test predicates
-  const provisional = { content, type: blockType } as Block;
+  const provisional = { content } as Block;
   if (!canBeSiblingAt(provisional, after.pageId, after.parent) && canAcceptChildren(after)) {
-    return createChildBlock(afterId, content, blockType as any);
+    return createChildBlock(afterId, content);
   }
 
   const siblings = getSiblings(afterId);
@@ -124,25 +127,19 @@ export function createBlockAfter(afterId: string, content: string = '', type?: '
   const next = siblings[idx + 1];
   const order = orderBetween(after.order, next?.order);
   const id = crypto.randomUUID();
-  saveBlock({ id, content, pageId: after.pageId, parent: after.parent, order, type: blockType });
+  saveBlock({ id, content, pageId: after.pageId, parent: after.parent, order });
   return id;
 }
 
 /** Create a new block as the last child of `parentId`. */
-export function createChildBlock(parentId: string, content: string = '', type: 'bullet' | 'paragraph' = 'bullet'): string {
+export function createChildBlock(parentId: string, content: string = DEFAULT_NEW_CONTENT): string {
   const parent = blockData.value[parentId];
   if (!parent) return '';
   const children = Object.values(blockData.value)
     .filter(b => b.pageId === parent.pageId && b.parent === parentId);
   const id = crypto.randomUUID();
-  saveBlock({ id, content, pageId: parent.pageId, parent: parentId, order: nextOrder(children), type });
+  saveBlock({ id, content, pageId: parent.pageId, parent: parentId, order: nextOrder(children) });
   return id;
-}
-
-/** Check if a block is a paragraph (not a bullet). */
-export function isParagraph(blockId: string): boolean {
-  const block = blockData.value[blockId];
-  return block?.type === 'paragraph';
 }
 
 // --- Indent / Outdent ---
@@ -194,7 +191,10 @@ export function joinBlockWithPrevious(blockId: string, currentContent: string): 
   if (idx <= 0) return null;
   const prev = flat[idx - 1];
   const prevContent = prev.content;
-  const joinedContent = prevContent + currentContent;
+  // Strip the current block's own bullet prefix before appending so the join
+  // doesn't embed `- ` inside the merged bullet.
+  const tail = currentContent.startsWith('- ') ? currentContent.slice(2) : currentContent;
+  const joinedContent = prevContent + tail;
   const cursorPos = prevContent.length;
   saveBlock({ ...blockData.value[prev.id], content: joinedContent });
   deleteBlock(blockId);
@@ -226,11 +226,18 @@ export function removeBlock(blockId: string): string | null {
 
 // --- Carry forward ---
 
+/** Read todo status from a block's content, tolerating the bullet prefix
+ *  that v2 bullets carry (`"- [ ] task"` → status `'todo'`). */
+function blockTodoStatus(content: string): { status: string | null; text: string; syntax: 'checkbox' | 'keyword' | null } {
+  const rest = content.startsWith('- ') ? content.slice(2) : content;
+  return parseTodoStatus(rest);
+}
+
 /** Check if a block or any of its descendants has an incomplete todo. */
 export function hasIncompleteTodos(blockId: string): boolean {
   const block = blockData.value[blockId];
   if (!block) return false;
-  const { status } = parseTodoStatus(block.content);
+  const { status } = blockTodoStatus(block.content);
   if (status && status !== 'done' && status !== 'cancelled') return true;
   return Object.values(blockData.value)
     .filter(b => b.parent === blockId)
@@ -256,7 +263,7 @@ function doCarryForward(
   const block = blockData.value[blockId];
   if (!block) return false;
 
-  const { status } = parseTodoStatus(block.content);
+  const { status } = blockTodoStatus(block.content);
   const isComplete = status === 'done' || status === 'cancelled';
   if (isComplete) return false;
   if (!hasIncompleteTodos(blockId)) return false;
@@ -265,9 +272,11 @@ function doCarryForward(
     const src = blockData.value[sourceId];
     if (!src) return;
 
-    const { status: srcStatus, text: srcText } = parseTodoStatus(src.content);
+    const { status: srcStatus, text: srcText } = blockTodoStatus(src.content);
     const isComplete = srcStatus === 'done' || srcStatus === 'cancelled';
     const isTodo = srcStatus !== null;
+    // For bullet blocks, preserve the `- ` prefix when rewriting source content.
+    const bulletPrefix = src.content.startsWith('- ') ? '- ' : '';
 
     if (isComplete) return;
 
@@ -278,9 +287,9 @@ function doCarryForward(
       .sort((a, b) => a.order - b.order);
 
     if (targetParent === null) {
-      saveBlock({ id: newId, content: src.content, pageId: targetPageId, parent: null, order: targetOrder.value++, type: src.type });
+      saveBlock({ id: newId, content: src.content, pageId: targetPageId, parent: null, order: targetOrder.value++, layout: src.layout });
     } else {
-      saveBlock({ id: newId, content: src.content, pageId: targetPageId, parent: targetParent, order: src.order, type: src.type });
+      saveBlock({ id: newId, content: src.content, pageId: targetPageId, parent: targetParent, order: src.order, layout: src.layout });
     }
 
     // Recurse into children before modifying source (deleteBlock would remove descendants)
@@ -290,9 +299,9 @@ function doCarryForward(
 
     // Update source block
     if (isTodo) {
-      saveBlock({ ...src, content: `${linkText} ${srcText}` });
+      saveBlock({ ...src, content: `${bulletPrefix}${linkText} ${srcText}` });
     } else if (isRoot) {
-      saveBlock({ ...src, content: `${linkText} ${src.content}` });
+      saveBlock({ ...src, content: `${bulletPrefix}${linkText} ${src.content.slice(bulletPrefix.length)}` });
     } else {
       const remainingChildren = Object.values(blockData.value)
         .filter(b => b.parent === sourceId && b.pageId === src.pageId);

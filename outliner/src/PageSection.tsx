@@ -26,36 +26,33 @@ function renderBlockList(flat: FlatBlock[]) {
   const cellIds = new Set<string>();
   const kanbanIds = new Set<string>();
 
-  // Collect IDs to skip
+  // Collect IDs to skip: grid cells (rendered by TableBlock), and descendants
+  // of kanban headings (rendered by KanbanBoard).
   for (const node of flat) {
-    if (node.type === 'table') {
+    if (node.layout === 'grid') {
       const grid = getTableGrid(node.id);
       for (const row of grid) for (const cell of row.cells) cellIds.add(cell.id);
     }
-    if (node.type === 'paragraph') {
-      const heading = parseHeading(node.content);
-      if (heading.level && parseAnnotations(heading.text).kanban) {
-        for (const id of collectDescendantIds(node)) kanbanIds.add(id);
-      }
+    const heading = parseHeading(node.content);
+    if (heading.level && parseAnnotations(heading.text).kanban) {
+      for (const id of collectDescendantIds(node)) kanbanIds.add(id);
     }
   }
 
   const elements: any[] = [];
   for (const node of flat) {
     if (cellIds.has(node.id) || kanbanIds.has(node.id)) continue;
-    if (node.type === 'table') {
+    if (node.layout === 'grid') {
       elements.push(<TableBlock key={node.id} node={node} />);
-    } else if (node.type === 'paragraph') {
-      const heading = parseHeading(node.content);
-      if (heading.level && parseAnnotations(heading.text).kanban) {
-        elements.push(<BlockItem key={node.id} node={node} />);
-        elements.push(<KanbanBoard key={`kanban-${node.id}`} node={node} />);
-        continue;
-      }
-      elements.push(<BlockItem key={node.id} node={node} />);
-    } else {
-      elements.push(<BlockItem key={node.id} node={node} />);
+      continue;
     }
+    const heading = parseHeading(node.content);
+    if (heading.level && parseAnnotations(heading.text).kanban) {
+      elements.push(<BlockItem key={node.id} node={node} />);
+      elements.push(<KanbanBoard key={`kanban-${node.id}`} node={node} />);
+      continue;
+    }
+    elements.push(<BlockItem key={node.id} node={node} />);
   }
   return elements;
 }
@@ -100,8 +97,8 @@ export function PageSection({ pageId, titleClickable }: { pageId: string; titleC
               let last = currentFlat[currentFlat.length - 1];
               let anchor = blockData.value[last.id];
 
-              // Walk up to table
-              if (anchor?.parent && blockData.value[anchor.parent]?.type === 'table') {
+              // Walk up to grid container
+              if (anchor?.parent && blockData.value[anchor.parent]?.layout === 'grid') {
                 anchor = blockData.value[anchor.parent];
               }
 
@@ -124,27 +121,30 @@ export function PageSection({ pageId, titleClickable }: { pageId: string; titleC
               if (!anchor) return;
 
               // If the anchor is empty and editable, just focus it
-              const isSpecial = anchor.type === 'table' || isKanbanHeading(anchor);
+              const isSpecial = anchor.layout === 'grid' || isKanbanHeading(anchor);
               if (anchor.content.trim() === '' && !isSpecial) {
                 activateBlock(anchor.id, 'end');
                 return;
               }
 
-              // Create a sibling paragraph after the anchor
+              // Create a sibling after the anchor. For kanban/grid special
+              // cases we sibling-match the anchor; otherwise a normal
+              // empty bullet via createBlockAfter.
               beginUndo('new block');
               if (isSpecial) {
                 const id = crypto.randomUUID();
                 const siblings = Object.values(blockData.value)
                   .filter(b => b.pageId === pageId && b.parent === anchor!.parent);
                 const maxOrder = siblings.reduce((m, b) => Math.max(m, b.order), 0);
-                // Match the heading level so it becomes a proper sibling
+                // Match the heading level so it becomes a proper sibling; if
+                // the anchor isn't a heading, start a plain bullet.
                 const { level } = parseHeading(anchor.content);
-                const content = level ? '#'.repeat(level) + ' ' : '';
-                saveBlock({ id, content, pageId, parent: anchor.parent, order: maxOrder + 1, type: 'paragraph' });
+                const content = level ? '#'.repeat(level) + ' ' : '- ';
+                saveBlock({ id, content, pageId, parent: anchor.parent, order: maxOrder + 1 });
                 commitUndo();
                 activateBlock(id, 'end');
               } else {
-                const newId = createBlockAfter(anchor.id, '', 'paragraph');
+                const newId = createBlockAfter(anchor.id);
                 commitUndo();
                 activateBlock(newId, 'end');
               }

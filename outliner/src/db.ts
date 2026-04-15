@@ -5,7 +5,7 @@
 
 import { signal, computed } from '@preact/signals';
 import type { Store, StoreOp, Page, Block, BlockNode, WatchEvent } from './types';
-import { parseHeading, isJournalSlug, formatJournalTitle } from './parse';
+import { classifyBlock, isJournalSlug, formatJournalTitle } from './parse';
 
 // --- Encoding ---
 
@@ -317,11 +317,18 @@ function emitDelete(key: Uint8Array) {
 // --- Block CRUD ---
 
 export function saveBlock(block: Block) {
+  // Invariant: grid containers carry no text; content lives in their cells.
+  // Catching this at the boundary prevents silently-hidden data ending up in
+  // the store via import/migration bugs or hand-written writes.
+  if (block.layout === 'grid' && block.content !== '') {
+    throw new Error(`saveBlock: grid container ${block.id} must have empty content, got ${JSON.stringify(block.content)}`);
+  }
+
   const existing = blockData.value[block.id] ?? null;
 
   if (existing &&
     existing.content === block.content &&
-    existing.type === block.type &&
+    existing.layout === block.layout &&
     existing.parent === block.parent &&
     existing.order === block.order &&
     existing.col === block.col &&
@@ -509,29 +516,33 @@ export function maybeRebalance(pageId: string, parent: string | null) {
 
 // --- Nesting predicates ---
 
-type BlockKind = 'bullet' | 'heading' | 'paragraph' | 'table';
+type BlockKind = 'bullet' | 'heading' | 'paragraph' | 'table' | 'hrule';
 
-/** Convert a block to its single-line markdown representation for editing. */
+/** Convert a block to its single-line markdown representation for editing.
+ *  Content *is* the markdown, so this is a pass-through. Grid cells return
+ *  their (bare) content unchanged; the surrounding grid renderer composes
+ *  the `| ... |` form itself. */
 export function blockToMarkdown(block: Block): string {
-  if (block.type === 'paragraph' || block.type === 'table') return block.content;
-  return '- ' + block.content;
+  return block.content;
 }
 
-/** Parse a single-line markdown string back into type + content. */
-export function markdownToBlock(md: string): { type: 'bullet' | 'paragraph'; content: string } {
-  if (md.startsWith('- ') || md.startsWith('* ') || md.startsWith('+ ')) {
-    return { type: 'bullet', content: md.slice(2) };
+/** Parse a single-line markdown string back into fields to save. Normalizes
+ *  `*` / `+` bullet markers to the canonical `- `. Heading/hrule/todo/
+ *  paragraph distinctions live in the content prefix and don't produce a
+ *  separate field. */
+export function markdownToBlock(md: string): { content: string } {
+  if (md.startsWith('* ') || md.startsWith('+ ')) {
+    return { content: '- ' + md.slice(2) };
   }
-  return { type: 'paragraph', content: md };
+  return { content: md };
 }
 
-/** Determine the kind of a block. */
+/** String kind used by the nesting-rule predicates below. Thin wrapper
+ *  over `classifyBlock`: grids are detected structurally via `layout`,
+ *  everything else flows through the content classifier. */
 export function blockKind(block: Block): BlockKind {
-  if (block.type === 'table') return 'table';
-  if (block.type === 'paragraph') {
-    return parseHeading(block.content).level ? 'heading' : 'paragraph';
-  }
-  return 'bullet';
+  if (block.layout === 'grid') return 'table';
+  return classifyBlock(block.content).kind;
 }
 
 /** Can `block` accept children? Permit list: bullet, heading. */
@@ -555,7 +566,7 @@ export function canBeSiblingAt(block: Block, pageId: string, parent: string | nu
   const kind = blockKind(block);
   if (kind === 'table') return true;
   if (levelKinds.has('heading')) return kind === 'heading';
-  return kind === 'bullet' || kind === 'paragraph';
+  return kind === 'bullet' || kind === 'paragraph' || kind === 'hrule';
 }
 
 // --- Backlinks & tags ---

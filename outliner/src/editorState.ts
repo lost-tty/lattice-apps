@@ -9,7 +9,7 @@ import type { RefObject } from 'preact';
 import type { FlatBlock } from './db';
 import type { Block, BlockNode } from './types';
 import { activeBlockId, blockData } from './db';
-import { parseHeading, parseTodoStatus } from './parse';
+import { classifyBlock, parseHeading } from './parse';
 
 // --- Mutable state ---
 
@@ -131,19 +131,23 @@ export function getVisualDepth(node: FlatBlock): number {
   let pid = node.parent;
   while (pid) {
     const p = blockData.value[pid];
-    if (p && p.type === 'paragraph' && parseHeading(p.content).level) depth--;
+    if (p && parseHeading(p.content).level) depth--;
     pid = p?.parent ?? null;
   }
   return depth;
 }
 
 /** Return the content template for a new sibling of this block.
- *  Checkboxes continue unchecked, todo keywords carry over, etc. */
+ *  Bullets continue as bullets; checkboxes continue unchecked; todo keywords
+ *  carry over with the bullet prefix. Non-bullets return empty. */
 export function continuationContent(block: Block): string {
-  const { status, syntax } = parseTodoStatus(block.content);
-  if (syntax === 'checkbox') return '[ ] ';
-  if (status) return status === 'done' || status === 'cancelled' ? '' : `${status.toUpperCase()} `;
-  return '';
+  const k = classifyBlock(block.content);
+  if (k.kind !== 'bullet') return '';
+  if (!k.todo) return '- ';
+  if (k.todo.syntax === 'checkbox') return '- [ ] ';
+  const s = k.todo.status;
+  if (s === 'done' || s === 'cancelled') return '- ';
+  return `- ${s.toUpperCase()} `;
 }
 
 /** Collect all descendant IDs from a FlatBlock's children tree. */

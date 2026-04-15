@@ -4,13 +4,51 @@ import { buildTar, parseTar } from '../src/tar';
 import {
   init, reset, pageData, blockData,
   savePage, getOrCreatePage, deletePage,
-  saveBlock, deleteBlock,
+  saveBlock as _rawSaveBlock, deleteBlock,
   buildTree, flattenTree, getSiblings, validateTree,
   hasChildren, toggleCollapse, isCollapsed, collapsedBlocks,
   getBacklinks,
   navigateTo, navigateById, findPageBySlug, currentPage, activeBlockId,
   pageTitle, pageList, isTentativePage,
 } from '../src/db';
+import type { Block } from '../src/types';
+
+/** Test-only compatibility wrapper over `saveBlock`.
+ *
+ *  Historical fixtures here set `type: 'bullet' | 'paragraph' | 'table'`
+ *  and stored bare content; this wrapper translates them on the fly into
+ *  the current schema (`content` prefix + `layout`) so the large existing
+ *  fixture base keeps working without a mass rewrite.
+ *
+ *  NEW TESTS should write the current shape directly and skip `type`:
+ *
+ *    saveBlock({ content: '- foo', ... })                    // bullet
+ *    saveBlock({ content: '# H', ... })                      // heading
+ *    saveBlock({ content: 'prose', ... })                    // paragraph
+ *    saveBlock({ content: '', layout: 'grid', ... })         // grid container
+ *
+ *  The wrapper is a bridge, not a preferred API. */
+function saveBlock(block: any) {
+  const { type, content = '', layout, col, ...rest } = block;
+  if (type === 'table') {
+    return _rawSaveBlock({ ...rest, content, col, layout: 'grid' });
+  }
+  if (type === 'paragraph') {
+    return _rawSaveBlock({ ...rest, content, col, layout });
+  }
+  // Grid cells (identified by `col`) keep bare content, no bullet prefix.
+  if (col !== undefined) {
+    return _rawSaveBlock({ ...rest, content, col, layout });
+  }
+  const alreadyMigrated =
+    content === '' ||
+    content === '- ' ||
+    content.startsWith('- ') ||
+    /^#{1,6} /.test(content) ||
+    content === '---';
+  const nextContent = alreadyMigrated ? content : '- ' + content;
+  return _rawSaveBlock({ ...rest, content: nextContent, col, layout });
+}
 import { beginUndo, commitUndo, undo, redo } from '../src/undo';
 import {
   parseWikiLinks, isTableRow, isTableSeparator, parseTableCells, parseHeading,
@@ -111,21 +149,21 @@ describe('init and CRUD', () => {
     });
     await store.Put({
       key: encode('block/abc'),
-      value: encode(JSON.stringify({ content: 'hello', pageId: 'pg1', parent: null, order: 0 })),
+      value: encode(JSON.stringify({ content: '- hello', pageId: 'pg1', parent: null, order: 0 })),
     });
     await init(store);
 
     expect(pageData.value['pg1']).toBeDefined();
     expect(pageData.value['pg1'].title).toBe('test');
     expect(blockData.value['abc']).toBeDefined();
-    expect(blockData.value['abc'].content).toBe('hello');
+    expect(blockData.value['abc'].content).toBe('- hello');
     expect(blockData.value['abc'].pageId).toBe('pg1');
   });
 
   it('saveBlock updates signal and store', () => {
     const pageId = getOrCreatePage('p');
     saveBlock({ id: '1', content: 'hi', pageId, parent: null, order: 0 });
-    expect(blockData.value['1'].content).toBe('hi');
+    expect(blockData.value['1'].content).toBe('- hi');
   });
 
   it('saveBlock auto-sets createdAt on new blocks', () => {
@@ -239,9 +277,9 @@ describe('createBlockAfter', () => {
     saveBlock({ id: '1', content: 'first', pageId, parent: null, order: 0 });
     saveBlock({ id: '2', content: 'second', pageId, parent: null, order: 1 });
 
-    const newId = createBlockAfter('1', 'between');
+    const newId = createBlockAfter('1', '- between');
     const block = blockData.value[newId];
-    expect(block.content).toBe('between');
+    expect(block.content).toBe('- between');
     expect(block.order).toBeGreaterThan(0);
     expect(block.order).toBeLessThan(1);
     expect(block.parent).toBeNull();
@@ -252,7 +290,7 @@ describe('createBlockAfter', () => {
     const pageId = getOrCreatePage('p');
     saveBlock({ id: '1', content: 'only', pageId, parent: null, order: 0 });
 
-    const newId = createBlockAfter('1', 'after');
+    const newId = createBlockAfter('1', '- after');
     expect(blockData.value[newId].order).toBeGreaterThan(0);
   });
 
@@ -261,7 +299,7 @@ describe('createBlockAfter', () => {
     saveBlock({ id: '1', content: 'parent', pageId, parent: null, order: 0 });
     saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
 
-    const newId = createBlockAfter('2', 'new child');
+    const newId = createBlockAfter('2', '- new child');
     expect(blockData.value[newId].parent).toBe('1');
   });
 
@@ -269,19 +307,20 @@ describe('createBlockAfter', () => {
     const pageId = getOrCreatePage('p');
     saveBlock({ id: '1', content: 'hello world', pageId, parent: null, order: 0 });
 
-    // Simulate Enter at offset 5: "hello" stays, " world" goes to new block
+    // Simulate Enter at offset 5: "hello" stays, " world" goes to new block.
+    // In v2, the new block's content carries the bullet prefix: "- " + " world".
     const before = 'hello';
-    const after = ' world';
+    const after = '-  world';
     saveBlock({ ...blockData.value['1'], content: before });
     const newId = createBlockAfter('1', after);
     activeBlockId.value = newId;
 
-    expect(blockData.value['1'].content).toBe('hello');
-    expect(blockData.value[newId].content).toBe(' world');
+    expect(blockData.value['1'].content).toBe('- hello');
+    expect(blockData.value[newId].content).toBe('-  world');
     expect(activeBlockId.value).toBe(newId);
 
     const flat = flattenTree(buildTree(pageId));
-    expect(flat.map(b => b.content)).toEqual(['hello', ' world']);
+    expect(flat.map(b => b.content)).toEqual(['- hello', '-  world']);
   });
 });
 
@@ -291,10 +330,10 @@ describe('createChildBlock', () => {
     saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
     saveBlock({ id: '2', content: 'existing', pageId, parent: '1', order: 0 });
 
-    const newId = createChildBlock('1', 'new child');
+    const newId = createChildBlock('1', '- new child');
     const block = blockData.value[newId];
     expect(block.parent).toBe('1');
-    expect(block.content).toBe('new child');
+    expect(block.content).toBe('- new child');
     expect(block.order).toBeGreaterThan(blockData.value['2'].order);
   });
 
@@ -302,7 +341,7 @@ describe('createChildBlock', () => {
     const pageId = getOrCreatePage('p');
     saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
 
-    const newId = createChildBlock('1', 'first');
+    const newId = createChildBlock('1', '- first');
     expect(blockData.value[newId].parent).toBe('1');
   });
 });
@@ -443,9 +482,9 @@ describe('joinBlockWithPrevious', () => {
     const result = joinBlockWithPrevious('2', 'world');
     expect(result).not.toBeNull();
     expect(result!.prevId).toBe('1');
-    expect(blockData.value['1'].content).toBe('helloworld');
+    expect(blockData.value['1'].content).toBe('- helloworld');
     expect(blockData.value['2']).toBeUndefined();
-    expect(result!.cursorPos).toBe(5);
+    expect(result!.cursorPos).toBe(7);
   });
 
   it('preserves existing trailing space', () => {
@@ -456,9 +495,9 @@ describe('joinBlockWithPrevious', () => {
     const result = joinBlockWithPrevious('2', 'world');
     expect(result).not.toBeNull();
     expect(result!.prevId).toBe('1');
-    expect(blockData.value['1'].content).toBe('hello world');
+    expect(blockData.value['1'].content).toBe('- hello world');
     expect(blockData.value['2']).toBeUndefined();
-    expect(result!.cursorPos).toBe(6);
+    expect(result!.cursorPos).toBe(8);
   });
 
   it('returns null for the first block on the page', () => {
@@ -467,7 +506,7 @@ describe('joinBlockWithPrevious', () => {
 
     const result = joinBlockWithPrevious('1', 'only block');
     expect(result).toBeNull();
-    expect(blockData.value['1'].content).toBe('only block');
+    expect(blockData.value['1'].content).toBe('- only block');
   });
 
   it('works across nesting levels (previous in flat tree order)', () => {
@@ -478,7 +517,7 @@ describe('joinBlockWithPrevious', () => {
 
     const result = joinBlockWithPrevious('3', 'next');
     expect(result!.prevId).toBe('2');
-    expect(blockData.value['2'].content).toBe('childnext');
+    expect(blockData.value['2'].content).toBe('- childnext');
     expect(blockData.value['3']).toBeUndefined();
   });
 
@@ -490,9 +529,9 @@ describe('joinBlockWithPrevious', () => {
     const result = joinBlockWithPrevious('2', '');
     expect(result).not.toBeNull();
     expect(result!.prevId).toBe('1');
-    expect(blockData.value['1'].content).toBe('hello');
+    expect(blockData.value['1'].content).toBe('- hello');
     expect(blockData.value['2']).toBeUndefined();
-    expect(result!.cursorPos).toBe(5);
+    expect(result!.cursorPos).toBe(7);
   });
 });
 
@@ -641,10 +680,11 @@ describe('parseMarkdownToItems', () => {
     const pageId = getOrCreatePage('rt-continuation');
     importPage(pageId, '- parent\n  continuation\n  more\n  - child\n    child cont');
     const flat = flattenTree(buildTree(pageId));
-    // Continuation lines join with their bullet block
+    // Continuation lines join with their bullet block (content now carries
+    // the `- ` prefix as part of v2).
     expect(flat.map(b => ({ content: b.content, depth: b.depth }))).toEqual([
-      { content: 'parent\ncontinuation\nmore', depth: 0 },
-      { content: 'child\nchild cont',          depth: 1 },
+      { content: '- parent\ncontinuation\nmore', depth: 0 },
+      { content: '- child\nchild cont',          depth: 1 },
     ]);
     // Re-export should produce valid CommonMark with indented continuations
     const md = exportPage(pageId);
@@ -655,8 +695,8 @@ describe('parseMarkdownToItems', () => {
 describe('insertBlocksAfter', () => {
   it('inserts flat items as siblings after the anchor', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'z', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', content: '- a', pageId, parent: null, order: 0 });
+    saveBlock({ id: '2', content: '- z', pageId, parent: null, order: 1 });
 
     insertBlocksAfter('1', [
       { content: 'b', relativeDepth: 0 },
@@ -664,12 +704,12 @@ describe('insertBlocksAfter', () => {
     ]);
 
     const flat = flattenTree(buildTree(pageId));
-    expect(flat.map(b => b.content)).toEqual(['a', 'b', 'c', 'z']);
+    expect(flat.map(b => b.content)).toEqual(['- a', '- b', '- c', '- z']);
   });
 
   it('inserts nested items at the correct depth', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'root', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', content: '- root', pageId, parent: null, order: 0 });
 
     insertBlocksAfter('1', [
       { content: 'sibling',     relativeDepth: 0 },
@@ -680,48 +720,48 @@ describe('insertBlocksAfter', () => {
 
     const flat = flattenTree(buildTree(pageId));
     expect(flat.map(b => ({ content: b.content, depth: b.depth }))).toEqual([
-      { content: 'root',       depth: 0 },
-      { content: 'sibling',    depth: 0 },
-      { content: 'child',      depth: 1 },
-      { content: 'grandchild', depth: 2 },
-      { content: 'next',       depth: 0 },
+      { content: '- root',       depth: 0 },
+      { content: '- sibling',    depth: 0 },
+      { content: '- child',      depth: 1 },
+      { content: '- grandchild', depth: 2 },
+      { content: '- next',       depth: 0 },
     ]);
   });
 
   it('returns the id of the last inserted block', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', content: '- a', pageId, parent: null, order: 0 });
 
     const lastId = insertBlocksAfter('1', [
       { content: 'b', relativeDepth: 0 },
       { content: 'c', relativeDepth: 0 },
     ]);
 
-    expect(blockData.value[lastId].content).toBe('c');
+    expect(blockData.value[lastId].content).toBe('- c');
   });
 
   it('inserts between existing siblings, not after them', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'b', pageId, parent: null, order: 1 });
-    saveBlock({ id: '3', content: 'z', pageId, parent: null, order: 2 });
+    saveBlock({ id: '1', content: '- a', pageId, parent: null, order: 0 });
+    saveBlock({ id: '2', content: '- b', pageId, parent: null, order: 1 });
+    saveBlock({ id: '3', content: '- z', pageId, parent: null, order: 2 });
 
     insertBlocksAfter('2', [{ content: 'inserted', relativeDepth: 0 }]);
 
     const flat = flattenTree(buildTree(pageId));
-    expect(flat.map(b => b.content)).toEqual(['a', 'b', 'inserted', 'z']);
+    expect(flat.map(b => b.content)).toEqual(['- a', '- b', '- inserted', '- z']);
   });
 
   it('depth-0 items land after the anchor\'s existing children in flat order', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'anchor', pageId, parent: null,  order: 0 });
-    saveBlock({ id: '2', content: 'child',  pageId, parent: '1',   order: 0 });
-    saveBlock({ id: '3', content: 'next',   pageId, parent: null,  order: 1 });
+    saveBlock({ id: '1', content: '- anchor', pageId, parent: null,  order: 0 });
+    saveBlock({ id: '2', content: '- child',  pageId, parent: '1',   order: 0 });
+    saveBlock({ id: '3', content: '- next',   pageId, parent: null,  order: 1 });
 
     insertBlocksAfter('1', [{ content: 'inserted', relativeDepth: 0 }]);
 
     const flat = flattenTree(buildTree(pageId));
-    expect(flat.map(b => b.content)).toEqual(['anchor', 'child', 'inserted', 'next']);
+    expect(flat.map(b => b.content)).toEqual(['- anchor', '- child', '- inserted', '- next']);
   });
 });
 
@@ -870,11 +910,12 @@ describe('importPage', () => {
     const pageId = getOrCreatePage('import-basic');
     importPage(pageId, '- root\n  - child\n    - grandchild\n- sibling');
     const flat = flattenTree(buildTree(pageId));
+    // v2: bullet content carries the `- ` prefix.
     expect(flat.map(b => ({ content: b.content, depth: b.depth }))).toEqual([
-      { content: 'root',       depth: 0 },
-      { content: 'child',      depth: 1 },
-      { content: 'grandchild', depth: 2 },
-      { content: 'sibling',    depth: 0 },
+      { content: '- root',       depth: 0 },
+      { content: '- child',      depth: 1 },
+      { content: '- grandchild', depth: 2 },
+      { content: '- sibling',    depth: 0 },
     ]);
   });
 
@@ -884,7 +925,7 @@ describe('importPage', () => {
     importPage(pageId, '- fresh');
     const flat = flattenTree(buildTree(pageId));
     expect(flat).toHaveLength(1);
-    expect(flat[0].content).toBe('fresh');
+    expect(flat[0].content).toBe('- fresh');
   });
 
   it('rebuilds the complex page with correct structure', () => {
@@ -893,9 +934,9 @@ describe('importPage', () => {
     const flat = flattenTree(buildTree(pageId));
     // Heading at depth 0, its bullets at depth 1, nested bullets deeper
     expect(flat[0]).toMatchObject({ content: '# Project Overview', depth: 0 });
-    expect(flat[1]).toMatchObject({ content: '**Goals** for this quarter: ship [[Outliner]] v1', depth: 1 });
-    expect(flat[2]).toMatchObject({ content: 'TODO Write feature specs', depth: 2 });
-    expect(flat[4]).toMatchObject({ content: '~~old approach~~ replaced with ==highlights==', depth: 3 });
+    expect(flat[1]).toMatchObject({ content: '- **Goals** for this quarter: ship [[Outliner]] v1', depth: 1 });
+    expect(flat[2]).toMatchObject({ content: '- TODO Write feature specs', depth: 2 });
+    expect(flat[4]).toMatchObject({ content: '- ~~old approach~~ replaced with ==highlights==', depth: 3 });
     expect(flat[8]).toMatchObject({ content: '---', depth: 0 });
     expect(flat[9]).toMatchObject({ content: '## Meeting Notes', depth: 1 });
     expect(flat[16]).toMatchObject({ content: '# Resources', depth: 0 });
@@ -961,14 +1002,14 @@ describe('importAllPages', () => {
     const notesPage = Object.values(pageData.value).find(p => p.title === 'notes');
     expect(notesPage).toBeDefined();
     const notesFlat = flattenTree(buildTree(notesPage!.id));
-    expect(notesFlat.map(b => b.content)).toEqual(['alpha', 'beta']);
+    expect(notesFlat.map(b => b.content)).toEqual(['- alpha', '- beta']);
 
     // Journal page
     const journalPage = Object.values(pageData.value).find(p => p.title === '2026-03-27');
     expect(journalPage).toBeDefined();
     expect(journalPage!.folder).toBe('journals');
     const journalFlat = flattenTree(buildTree(journalPage!.id));
-    expect(journalFlat.map(b => b.content)).toEqual(['today']);
+    expect(journalFlat.map(b => b.content)).toEqual(['- today']);
   });
 
   it('full roundtrip: exportAllPages → buildTar → parseTar → importAllPages', async () => {
@@ -992,7 +1033,7 @@ describe('importAllPages', () => {
     const page = Object.values(pageData.value).find(p => p.title === 'roundtrip-test');
     expect(page).toBeDefined();
     const flat = flattenTree(buildTree(page!.id));
-    expect(flat.map(b => b.content)).toEqual(['# Title', 'bullet']);
+    expect(flat.map(b => b.content)).toEqual(['# Title', '- bullet']);
     expect(flat[1].depth).toBe(1);
   });
 });
@@ -1097,7 +1138,7 @@ describe('table data model', () => {
       ['Bob', '25'],
     ]);
 
-    expect(blockData.value[tableId].type).toBe('table');
+    expect(blockData.value[tableId].layout).toBe('grid');
     const grid = getTableGrid(tableId);
     expect(grid.length).toBe(3);
     expect(grid[0].cells.length).toBe(2);
@@ -1275,7 +1316,7 @@ describe('table import/export', () => {
     const pageId = getOrCreatePage('table-import');
     importPage(pageId, '| H1 | H2 |\n|---|---|\n| a | b |');
     const flat = flattenTree(buildTree(pageId));
-    const table = flat.find(b => b.type === 'table');
+    const table = flat.find(b => b.layout === 'grid');
     expect(table).toBeDefined();
     const grid = getTableGrid(table!.id);
     expect(grid.length).toBe(2);
@@ -2041,9 +2082,9 @@ describe('undo / redo', () => {
     saveBlock({ id: '1', content: 'original', pageId, parent: null, order: 0 });
     saveBlock({ ...blockData.value['1'], content: 'edited' });
 
-    expect(blockData.value['1'].content).toBe('edited');
+    expect(blockData.value['1'].content).toBe('- edited');
     undo();
-    expect(blockData.value['1'].content).toBe('original');
+    expect(blockData.value['1'].content).toBe('- original');
   });
 
   it('redoes after undo', () => {
@@ -2052,9 +2093,9 @@ describe('undo / redo', () => {
     saveBlock({ ...blockData.value['1'], content: 'edited' });
 
     undo();
-    expect(blockData.value['1'].content).toBe('original');
+    expect(blockData.value['1'].content).toBe('- original');
     redo();
-    expect(blockData.value['1'].content).toBe('edited');
+    expect(blockData.value['1'].content).toBe('- edited');
   });
 
   it('undoes a grouped operation', () => {
@@ -2064,14 +2105,14 @@ describe('undo / redo', () => {
     // Simulate Enter: split into two blocks
     beginUndo('split');
     saveBlock({ ...blockData.value['1'], content: 'hello' });
-    saveBlock({ id: '2', content: ' world', pageId, parent: null, order: 1 });
+    saveBlock({ id: '2', content: '- world', pageId, parent: null, order: 1 });
     commitUndo();
 
-    expect(blockData.value['1'].content).toBe('hello');
+    expect(blockData.value['1'].content).toBe('- hello');
     expect(blockData.value['2']).toBeDefined();
 
     undo();
-    expect(blockData.value['1'].content).toBe('hello world');
+    expect(blockData.value['1'].content).toBe('- hello world');
     expect(blockData.value['2']).toBeUndefined();
   });
 
@@ -2090,8 +2131,8 @@ describe('undo / redo', () => {
     undo();
     expect(blockData.value['1']).toBeDefined();
     expect(blockData.value['2']).toBeDefined();
-    expect(blockData.value['1'].content).toBe('parent');
-    expect(blockData.value['2'].content).toBe('child');
+    expect(blockData.value['1'].content).toBe('- parent');
+    expect(blockData.value['2'].content).toBe('- child');
     expect(blockData.value['2'].parent).toBe('1');
   });
 
@@ -2116,12 +2157,12 @@ describe('undo / redo', () => {
     saveBlock({ ...blockData.value['1'], content: 'b' });
 
     undo();
-    expect(blockData.value['1'].content).toBe('a');
+    expect(blockData.value['1'].content).toBe('- a');
 
     // New edit should clear redo
     saveBlock({ ...blockData.value['1'], content: 'c' });
     redo(); // should do nothing
-    expect(blockData.value['1'].content).toBe('c');
+    expect(blockData.value['1'].content).toBe('- c');
   });
 
   it('undoes moveBlock', () => {
@@ -2169,7 +2210,7 @@ describe('batch accumulation', () => {
 
     beginUndo('split');
     saveBlock({ ...blockData.value['a'], content: 'hel' });
-    createBlockAfter('a', 'lo');
+    createBlockAfter('a', '- lo');
     commitUndo();
 
     // Should be exactly one Batch call, no individual Put/Delete
@@ -2234,7 +2275,7 @@ describe('batch accumulation', () => {
     // Split block via undo group (creates 2 patches)
     beginUndo('split');
     saveBlock({ ...blockData.value['u1'], content: 'hel' });
-    createBlockAfter('u1', 'lo');
+    createBlockAfter('u1', '- lo');
     commitUndo();
 
     spy.calls.length = 0;
@@ -2261,7 +2302,7 @@ describe('batch accumulation', () => {
 
     beginUndo('split');
     saveBlock({ ...blockData.value['r1'], content: 'hel' });
-    createBlockAfter('r1', 'lo');
+    createBlockAfter('r1', '- lo');
     commitUndo();
 
     undo();
@@ -2319,86 +2360,86 @@ describe('carryForward', () => {
   });
 
   it('carries forward a single incomplete todo', () => {
-    saveBlock({ id: 's1', content: '[ ] Fix bug', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's1', content: '- [ ] Fix bug', pageId: sourceId, parent: null, order: 0 });
 
     carryForward('s1', targetId);
 
     // Source block gets link, no longer a todo
-    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] Fix bug');
+    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] Fix bug');
     // New block created on target page with the todo content
     const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(1);
-    expect(targetBlocks[0].content).toBe('[ ] Fix bug');
+    expect(targetBlocks[0].content).toBe('- [ ] Fix bug');
   });
 
   it('carries forward a keyword todo (TODO, DOING)', () => {
-    saveBlock({ id: 's1', content: 'TODO Write tests', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's1', content: '- TODO Write tests', pageId: sourceId, parent: null, order: 0 });
 
     carryForward('s1', targetId);
 
-    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] Write tests');
+    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] Write tests');
     const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(1);
-    expect(targetBlocks[0].content).toBe('TODO Write tests');
+    expect(targetBlocks[0].content).toBe('- TODO Write tests');
   });
 
   it('skips complete children, carries incomplete children', () => {
-    saveBlock({ id: 's1', content: '[ ] Project X', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '[x] Research', pageId: sourceId, parent: 's1', order: 0 });
+    saveBlock({ id: 's1', content: '- [ ] Project X', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: '- [x] Research', pageId: sourceId, parent: 's1', order: 0 });
     saveBlock({ id: 's3', content: '[ ] Prototype', pageId: sourceId, parent: 's1', order: 1 });
 
     carryForward('s1', targetId);
 
     // Source: root and incomplete child get links, complete child untouched
-    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] Project X');
-    expect(blockData.value['s2'].content).toBe('[x] Research');
-    expect(blockData.value['s3'].content).toBe('[[2026-04-08]] Prototype');
+    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] Project X');
+    expect(blockData.value['s2'].content).toBe('- [x] Research');
+    expect(blockData.value['s3'].content).toBe('- [[2026-04-08]] Prototype');
 
     // Target: root + incomplete child, no complete child
     const targetBlocks = Object.values(blockData.value)
       .filter(b => b.pageId === targetId)
       .sort((a, b) => a.order - b.order);
     expect(targetBlocks).toHaveLength(2);
-    expect(targetBlocks[0].content).toBe('[ ] Project X');
-    expect(targetBlocks[1].content).toBe('[ ] Prototype');
+    expect(targetBlocks[0].content).toBe('- [ ] Project X');
+    expect(targetBlocks[1].content).toBe('- [ ] Prototype');
     expect(targetBlocks[1].parent).toBe(targetBlocks[0].id);
   });
 
   it('prunes entire subtree of a complete block', () => {
     saveBlock({ id: 's1', content: '[x] Done task', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '[ ] Leftover subtask', pageId: sourceId, parent: 's1', order: 0 });
+    saveBlock({ id: 's2', content: '- [ ] Leftover subtask', pageId: sourceId, parent: 's1', order: 0 });
 
     // Carry forward on a complete block should be a no-op
     carryForward('s1', targetId);
 
     // Source unchanged
-    expect(blockData.value['s1'].content).toBe('[x] Done task');
-    expect(blockData.value['s2'].content).toBe('[ ] Leftover subtask');
+    expect(blockData.value['s1'].content).toBe('- [x] Done task');
+    expect(blockData.value['s2'].content).toBe('- [ ] Leftover subtask');
     // Nothing on target
     const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(0);
   });
 
   it('carries forward non-todo children as context', () => {
-    saveBlock({ id: 's1', content: '[ ] Fix bug', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: 'Repro steps: open settings', pageId: sourceId, parent: 's1', order: 0 });
-    saveBlock({ id: 's3', content: '[ ] Write fix', pageId: sourceId, parent: 's1', order: 1 });
+    saveBlock({ id: 's1', content: '- [ ] Fix bug', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: '- Repro steps: open settings', pageId: sourceId, parent: 's1', order: 0 });
+    saveBlock({ id: 's3', content: '- [ ] Write fix', pageId: sourceId, parent: 's1', order: 1 });
 
     carryForward('s1', targetId);
 
     // Source: todos get links, non-todo child is deleted (moved)
-    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] Fix bug');
+    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] Fix bug');
     expect(blockData.value['s2']).toBeUndefined(); // moved to target
-    expect(blockData.value['s3'].content).toBe('[[2026-04-08]] Write fix');
+    expect(blockData.value['s3'].content).toBe('- [[2026-04-08]] Write fix');
 
     // Target: root + context + incomplete child
     const targetBlocks = Object.values(blockData.value)
       .filter(b => b.pageId === targetId)
       .sort((a, b) => a.order - b.order);
     expect(targetBlocks).toHaveLength(3);
-    expect(targetBlocks[0].content).toBe('[ ] Fix bug');
-    expect(targetBlocks[1].content).toBe('Repro steps: open settings');
-    expect(targetBlocks[2].content).toBe('[ ] Write fix');
+    expect(targetBlocks[0].content).toBe('- [ ] Fix bug');
+    expect(targetBlocks[1].content).toBe('- Repro steps: open settings');
+    expect(targetBlocks[2].content).toBe('- [ ] Write fix');
     // All children of the root
     expect(targetBlocks[1].parent).toBe(targetBlocks[0].id);
     expect(targetBlocks[2].parent).toBe(targetBlocks[0].id);
@@ -2417,9 +2458,9 @@ describe('carryForward', () => {
       .filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(3);
     const names = targetBlocks.map(b => b.content).sort();
-    expect(names).toContain('[ ] Project');
-    expect(names).toContain('[ ] Phase 1');
-    expect(names).toContain('[ ] Implement');
+    expect(names).toContain('- [ ] Project');
+    expect(names).toContain('- [ ] Phase 1');
+    expect(names).toContain('- [ ] Implement');
     // Mockup should NOT be on target
     expect(names).not.toContain('[x] Mockup');
   });
@@ -2435,9 +2476,9 @@ describe('carryForward', () => {
       .filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(3);
 
-    const root = targetBlocks.find(b => b.content === '[ ] Root')!;
-    const child = targetBlocks.find(b => b.content === '[ ] Child')!;
-    const grandchild = targetBlocks.find(b => b.content === '[ ] Grandchild')!;
+    const root = targetBlocks.find(b => b.content === '- [ ] Root')!;
+    const child = targetBlocks.find(b => b.content === '- [ ] Child')!;
+    const grandchild = targetBlocks.find(b => b.content === '- [ ] Grandchild')!;
 
     expect(root.parent).toBeNull();
     expect(child.parent).toBe(root.id);
@@ -2445,19 +2486,19 @@ describe('carryForward', () => {
   });
 
   it('does not double-carry a block already marked with a link', () => {
-    saveBlock({ id: 's1', content: '[[2026-04-07]] Fix bug', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's1', content: '- [[2026-04-07]] Fix bug', pageId: sourceId, parent: null, order: 0 });
 
     carryForward('s1', targetId);
 
     // Should be a no-op — block is not a todo
     const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(0);
-    expect(blockData.value['s1'].content).toBe('[[2026-04-07]] Fix bug');
+    expect(blockData.value['s1'].content).toBe('- [[2026-04-07]] Fix bug');
   });
 
   it('carries forward into a page that already has blocks', () => {
     saveBlock({ id: 't1', content: '[ ] Existing task', pageId: targetId, parent: null, order: 0 });
-    saveBlock({ id: 's1', content: '[ ] New task', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's1', content: '- [ ] New task', pageId: sourceId, parent: null, order: 0 });
 
     carryForward('s1', targetId);
 
@@ -2465,15 +2506,15 @@ describe('carryForward', () => {
       .filter(b => b.pageId === targetId)
       .sort((a, b) => a.order - b.order);
     expect(targetBlocks).toHaveLength(2);
-    expect(targetBlocks[0].content).toBe('[ ] Existing task');
+    expect(targetBlocks[0].content).toBe('- [ ] Existing task');
     // New task should be after existing
-    expect(targetBlocks[1].content).toBe('[ ] New task');
+    expect(targetBlocks[1].content).toBe('- [ ] New task');
   });
 
   it('whole operation is one undo group', () => {
     currentPage.value = sourceId;
     saveBlock({ id: 's1', content: '[ ] Task', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '[ ] Subtask', pageId: sourceId, parent: 's1', order: 0 });
+    saveBlock({ id: 's2', content: '- [ ] Subtask', pageId: sourceId, parent: 's1', order: 0 });
 
     carryForward('s1', targetId);
 
@@ -2484,45 +2525,45 @@ describe('carryForward', () => {
     // Undo should reverse the entire operation
     undo();
 
-    expect(blockData.value['s1'].content).toBe('[ ] Task');
-    expect(blockData.value['s2'].content).toBe('[ ] Subtask');
+    expect(blockData.value['s1'].content).toBe('- [ ] Task');
+    expect(blockData.value['s2'].content).toBe('- [ ] Subtask');
     const targetAfter = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetAfter).toHaveLength(0);
   });
 
   it('carries forward a non-todo parent that contains incomplete todos', () => {
     saveBlock({ id: 's1', content: 'Project X', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '[ ] Task A', pageId: sourceId, parent: 's1', order: 0 });
-    saveBlock({ id: 's3', content: '[x] Task B', pageId: sourceId, parent: 's1', order: 1 });
+    saveBlock({ id: 's2', content: '- [ ] Task A', pageId: sourceId, parent: 's1', order: 0 });
+    saveBlock({ id: 's3', content: '- [x] Task B', pageId: sourceId, parent: 's1', order: 1 });
 
     carryForward('s1', targetId);
 
     // Source: root gets link marker, complete child untouched, incomplete child gets link
-    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] Project X');
-    expect(blockData.value['s2'].content).toBe('[[2026-04-08]] Task A');
-    expect(blockData.value['s3'].content).toBe('[x] Task B');
+    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] Project X');
+    expect(blockData.value['s2'].content).toBe('- [[2026-04-08]] Task A');
+    expect(blockData.value['s3'].content).toBe('- [x] Task B');
 
     // Target: root + incomplete child (complete child pruned)
     const targetBlocks = Object.values(blockData.value)
       .filter(b => b.pageId === targetId)
       .sort((a, b) => a.order - b.order);
     expect(targetBlocks).toHaveLength(2);
-    expect(targetBlocks[0].content).toBe('Project X');
-    expect(targetBlocks[1].content).toBe('[ ] Task A');
+    expect(targetBlocks[0].content).toBe('- Project X');
+    expect(targetBlocks[1].content).toBe('- [ ] Task A');
     expect(targetBlocks[1].parent).toBe(targetBlocks[0].id);
   });
 
   it('skips a non-todo parent with no incomplete todo descendants', () => {
     saveBlock({ id: 's1', content: 'Project X', pageId: sourceId, parent: null, order: 0 });
     saveBlock({ id: 's2', content: '[x] Done', pageId: sourceId, parent: 's1', order: 0 });
-    saveBlock({ id: 's3', content: 'Just a note', pageId: sourceId, parent: 's1', order: 1 });
+    saveBlock({ id: 's3', content: '- Just a note', pageId: sourceId, parent: 's1', order: 1 });
 
     carryForward('s1', targetId);
 
     // No-op: no incomplete todos anywhere in subtree
-    expect(blockData.value['s1'].content).toBe('Project X');
-    expect(blockData.value['s2'].content).toBe('[x] Done');
-    expect(blockData.value['s3'].content).toBe('Just a note');
+    expect(blockData.value['s1'].content).toBe('- Project X');
+    expect(blockData.value['s2'].content).toBe('- [x] Done');
+    expect(blockData.value['s3'].content).toBe('- Just a note');
     const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(0);
   });
@@ -2535,17 +2576,17 @@ describe('carryForward', () => {
     carryForward('s1', targetId);
 
     // Source: all three get markers (root and Phase 1 are non-todo, deep task is todo)
-    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] Project');
+    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] Project');
     expect(blockData.value['s2']).toBeUndefined(); // non-todo child moved
-    expect(blockData.value['s3'].content).toBe('[[2026-04-08]] Deep task');
+    expect(blockData.value['s3'].content).toBe('- [[2026-04-08]] Deep task');
 
     // Target: full structure preserved
     const targetBlocks = Object.values(blockData.value)
       .filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(3);
-    const root = targetBlocks.find(b => b.content === 'Project')!;
-    const phase = targetBlocks.find(b => b.content === 'Phase 1')!;
-    const task = targetBlocks.find(b => b.content === '[ ] Deep task')!;
+    const root = targetBlocks.find(b => b.content === '- Project')!;
+    const phase = targetBlocks.find(b => b.content === '- Phase 1')!;
+    const task = targetBlocks.find(b => b.content === '- [ ] Deep task')!;
     expect(root.parent).toBeNull();
     expect(phase.parent).toBe(root.id);
     expect(task.parent).toBe(phase.id);
@@ -2557,26 +2598,26 @@ describe('carryForwardAll', () => {
     const sourceId = getOrCreatePage('2026-04-07');
     const targetId = getOrCreatePage('2026-04-08');
 
-    saveBlock({ id: 's1', content: '[ ] Task A', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '[x] Done B', pageId: sourceId, parent: null, order: 1 });
+    saveBlock({ id: 's1', content: '- [ ] Task A', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: '- [x] Done B', pageId: sourceId, parent: null, order: 1 });
     saveBlock({ id: 's3', content: '[ ] Task C', pageId: sourceId, parent: null, order: 2 });
-    saveBlock({ id: 's4', content: 'Plain text', pageId: sourceId, parent: null, order: 3 });
+    saveBlock({ id: 's4', content: '- Plain text', pageId: sourceId, parent: null, order: 3 });
 
     carryForwardAll(sourceId, targetId);
 
     // Source: incomplete todos get links, complete and plain untouched
-    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] Task A');
-    expect(blockData.value['s2'].content).toBe('[x] Done B');
-    expect(blockData.value['s3'].content).toBe('[[2026-04-08]] Task C');
-    expect(blockData.value['s4'].content).toBe('Plain text');
+    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] Task A');
+    expect(blockData.value['s2'].content).toBe('- [x] Done B');
+    expect(blockData.value['s3'].content).toBe('- [[2026-04-08]] Task C');
+    expect(blockData.value['s4'].content).toBe('- Plain text');
 
     // Target: only the two incomplete todos
     const targetBlocks = Object.values(blockData.value)
       .filter(b => b.pageId === targetId)
       .sort((a, b) => a.order - b.order);
     expect(targetBlocks).toHaveLength(2);
-    expect(targetBlocks[0].content).toBe('[ ] Task A');
-    expect(targetBlocks[1].content).toBe('[ ] Task C');
+    expect(targetBlocks[0].content).toBe('- [ ] Task A');
+    expect(targetBlocks[1].content).toBe('- [ ] Task C');
   });
 
   it('is a no-op when no incomplete todos exist', () => {
@@ -2584,12 +2625,12 @@ describe('carryForwardAll', () => {
     const targetId = getOrCreatePage('2026-04-08');
 
     saveBlock({ id: 's1', content: '[x] Done', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: 'Just text', pageId: sourceId, parent: null, order: 1 });
+    saveBlock({ id: 's2', content: '- Just text', pageId: sourceId, parent: null, order: 1 });
 
     carryForwardAll(sourceId, targetId);
 
-    expect(blockData.value['s1'].content).toBe('[x] Done');
-    expect(blockData.value['s2'].content).toBe('Just text');
+    expect(blockData.value['s1'].content).toBe('- [x] Done');
+    expect(blockData.value['s2'].content).toBe('- Just text');
     const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(0);
   });
@@ -2600,7 +2641,7 @@ describe('carryForwardAll', () => {
     currentPage.value = sourceId;
 
     saveBlock({ id: 's1', content: '[ ] A', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '[ ] B', pageId: sourceId, parent: null, order: 1 });
+    saveBlock({ id: 's2', content: '- [ ] B', pageId: sourceId, parent: null, order: 1 });
 
     carryForwardAll(sourceId, targetId);
 
@@ -2608,8 +2649,8 @@ describe('carryForwardAll', () => {
 
     undo();
 
-    expect(blockData.value['s1'].content).toBe('[ ] A');
-    expect(blockData.value['s2'].content).toBe('[ ] B');
+    expect(blockData.value['s1'].content).toBe('- [ ] A');
+    expect(blockData.value['s2'].content).toBe('- [ ] B');
     expect(Object.values(blockData.value).filter(b => b.pageId === targetId)).toHaveLength(0);
   });
 
@@ -2623,16 +2664,16 @@ describe('carryForwardAll', () => {
 
     carryForwardAll(sourceId, targetId);
 
-    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] Flat todo');
-    expect(blockData.value['s2'].content).toBe('[[2026-04-08]] Project X');
-    expect(blockData.value['s3'].content).toBe('[[2026-04-08]] Nested todo');
+    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] Flat todo');
+    expect(blockData.value['s2'].content).toBe('- [[2026-04-08]] Project X');
+    expect(blockData.value['s3'].content).toBe('- [[2026-04-08]] Nested todo');
 
     const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(3);
 
-    const flatTodo = targetBlocks.find(b => b.content === '[ ] Flat todo')!;
-    const project = targetBlocks.find(b => b.content === 'Project X')!;
-    const nested = targetBlocks.find(b => b.content === '[ ] Nested todo')!;
+    const flatTodo = targetBlocks.find(b => b.content === '- [ ] Flat todo')!;
+    const project = targetBlocks.find(b => b.content === '- Project X')!;
+    const nested = targetBlocks.find(b => b.content === '- [ ] Nested todo')!;
 
     expect(flatTodo.parent).toBeNull();
     expect(project.parent).toBeNull();
@@ -2659,27 +2700,27 @@ describe('carryForward edge cases', () => {
     carryForward('s1', sourceId);
 
     // Block should be unchanged — no link to itself, no duplicates
-    expect(blockData.value['s1'].content).toBe('[ ] Task');
+    expect(blockData.value['s1'].content).toBe('- [ ] Task');
     const allOnSource = Object.values(blockData.value).filter(b => b.pageId === sourceId);
     expect(allOnSource).toHaveLength(1);
   });
 
   it('carries forward DOING and WAIT statuses', () => {
-    saveBlock({ id: 's1', content: 'DOING In progress', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: 'WAIT Blocked', pageId: sourceId, parent: null, order: 1 });
+    saveBlock({ id: 's1', content: '- DOING In progress', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's2', content: '- WAIT Blocked', pageId: sourceId, parent: null, order: 1 });
 
     carryForward('s1', targetId);
     carryForward('s2', targetId);
 
-    expect(blockData.value['s1'].content).toBe('[[2026-04-08]] In progress');
-    expect(blockData.value['s2'].content).toBe('[[2026-04-08]] Blocked');
+    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] In progress');
+    expect(blockData.value['s2'].content).toBe('- [[2026-04-08]] Blocked');
 
     const targetBlocks = Object.values(blockData.value)
       .filter(b => b.pageId === targetId)
       .sort((a, b) => a.order - b.order);
     expect(targetBlocks).toHaveLength(2);
-    expect(targetBlocks[0].content).toBe('DOING In progress');
-    expect(targetBlocks[1].content).toBe('WAIT Blocked');
+    expect(targetBlocks[0].content).toBe('- DOING In progress');
+    expect(targetBlocks[1].content).toBe('- WAIT Blocked');
   });
 
   it('handles interleaved complete, non-todo, and incomplete children', () => {
@@ -2692,7 +2733,7 @@ describe('carryForward edge cases', () => {
     carryForward('s1', targetId);
 
     // Source: complete child stays, non-todo children moved, todos get links
-    expect(blockData.value['s3'].content).toBe('[x] Done step');
+    expect(blockData.value['s3'].content).toBe('- [x] Done step');
     expect(blockData.value['s2']).toBeUndefined(); // moved
     expect(blockData.value['s4']).toBeUndefined(); // moved
 
@@ -2702,11 +2743,11 @@ describe('carryForward edge cases', () => {
       .sort((a, b) => a.order - b.order);
     expect(targetBlocks).toHaveLength(4);
     const contents = targetBlocks.map(b => b.content);
-    expect(contents).toContain('[ ] Task');
-    expect(contents).toContain('notes A');
-    expect(contents).toContain('notes B');
-    expect(contents).toContain('[ ] Pending');
-    expect(contents).not.toContain('[x] Done step');
+    expect(contents).toContain('- [ ] Task');
+    expect(contents).toContain('- notes A');
+    expect(contents).toContain('- notes B');
+    expect(contents).toContain('- [ ] Pending');
+    expect(contents).not.toContain('- [x] Done step');
   });
 
   it('reparents complete children when non-todo intermediate is deleted', () => {
@@ -2720,26 +2761,28 @@ describe('carryForward edge cases', () => {
     // Phase 1 (non-todo) was deleted from source
     expect(blockData.value['s2']).toBeUndefined();
     // [x] Done thing should be reparented to s1 (Root) on source
-    expect(blockData.value['s3'].content).toBe('[x] Done thing');
+    expect(blockData.value['s3'].content).toBe('- [x] Done thing');
     expect(blockData.value['s3'].parent).toBe('s1');
 
     // Target should have Root > Phase 1 > Pending thing
     const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(3);
-    const root = targetBlocks.find(b => b.content === '[ ] Root')!;
-    const phase = targetBlocks.find(b => b.content === 'Phase 1')!;
-    const pending = targetBlocks.find(b => b.content === '[ ] Pending thing')!;
+    const root = targetBlocks.find(b => b.content === '- [ ] Root')!;
+    const phase = targetBlocks.find(b => b.content === '- Phase 1')!;
+    const pending = targetBlocks.find(b => b.content === '- [ ] Pending thing')!;
     expect(phase.parent).toBe(root.id);
     expect(pending.parent).toBe(phase.id);
   });
 
-  it('preserves block type on copy', () => {
+  it('preserves block kind on copy (content stays bare for paragraph-style todos)', () => {
     saveBlock({ id: 's1', content: '[ ] Task', pageId: sourceId, parent: null, order: 0, type: 'paragraph' });
 
     carryForward('s1', targetId);
 
     const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(1);
-    expect(targetBlocks[0].type).toBe('paragraph');
+    // In v2 there's no `type` field; kind comes from content prefix.
+    // A bare-todo paragraph stays bare on copy.
+    expect(targetBlocks[0].content).toBe('[ ] Task');
   });
 });

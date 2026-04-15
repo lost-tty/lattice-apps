@@ -77,18 +77,63 @@ export function parseTodoStatus(content: string): { status: string | null; synta
 
 /** Cycle task status.
  *  Checkbox syntax stays as checkboxes: [ ] ↔ [x].
- *  Keyword syntax cycles: none → TODO → DOING → DONE → CANCELLED → TODO. */
+ *  Keyword syntax cycles: none → TODO → DOING → DONE → CANCELLED → TODO.
+ *  Handles a leading `- ` bullet marker: preserved through the cycle so
+ *  `"- [ ] task"` ↔ `"- [x] task"`. */
 export function cycleTodoStatus(content: string): string {
-  const { status, syntax, text } = parseTodoStatus(content);
+  const bullet = content.startsWith('- ') ? '- ' : '';
+  const rest = content.slice(bullet.length);
+  const { status, syntax, text } = parseTodoStatus(rest);
   if (syntax === 'checkbox') {
-    return status === 'done' ? `[ ] ${text}` : `[x] ${text}`;
+    return `${bullet}${status === 'done' ? '[ ]' : '[x]'} ${text}`;
   }
   const next: Record<string, string> = {
     todo: 'DOING', doing: 'DONE', done: 'CANCELLED', cancelled: 'TODO',
     later: 'DOING', wait: 'DOING',
   };
-  if (!status) return `TODO ${content}`;
-  return `${next[status] ?? 'TODO'} ${text}`;
+  if (!status) return `${bullet}TODO ${rest}`;
+  return `${bullet}${next[status] ?? 'TODO'} ${text}`;
+}
+
+// --- Block classification ---
+
+/** The kind of a content block, derived from its content prefix. Structural
+ *  blocks (grid containers, grid cells) aren't classified here — the caller
+ *  inspects `block.layout` / `block.col` for those concerns. */
+export type BlockClassification =
+  | { kind: 'bullet';  text: string; todo?: { status: string; syntax: 'checkbox' | 'keyword' } }
+  | { kind: 'heading'; level: number; text: string }
+  | { kind: 'hrule' }
+  | { kind: 'paragraph'; text: string };
+
+/** Classify a block's content. Pure function of the content string;
+ *  returns the block's apparent kind and any parsed sub-fields (heading
+ *  level, todo status). Structural context (e.g. grid-cell membership)
+ *  is not this function's concern — callers decide that structurally. */
+export function classifyBlock(content: string): BlockClassification {
+  // Heading wins over everything: `# ` through `###### `.
+  const h = parseHeading(content);
+  if (h.level != null) return { kind: 'heading', level: h.level, text: h.text };
+
+  // Horizontal rule: `---` on its own.
+  if (content.trim() === '---') return { kind: 'hrule' };
+
+  // Bullet: `- ` prefix. An empty bullet (`"- "` with nothing after) also
+  // matches via `startsWith`.
+  if (content.startsWith('- ')) {
+    const rest = content.slice(2);
+    const td = parseTodoStatus(rest);
+    if (td.status && td.syntax) {
+      return {
+        kind: 'bullet',
+        text: td.text,
+        todo: { status: td.status, syntax: td.syntax },
+      };
+    }
+    return { kind: 'bullet', text: rest };
+  }
+
+  return { kind: 'paragraph', text: content };
 }
 
 // --- Journal date helpers ---

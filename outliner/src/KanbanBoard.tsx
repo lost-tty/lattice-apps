@@ -37,7 +37,9 @@ function KanbanCard({ blockId }: { blockId: string }) {
     const current = blockData.value[blockId];
     if (!current) return;
     if (content !== current.content) {
-      saveBlock({ ...current, content, type: 'bullet' });
+      // Cards stay bullets; store with canonical `- ` prefix.
+      const bulletContent = content.startsWith('- ') ? content : '- ' + content;
+      saveBlock({ ...current, content: bulletContent });
     }
   }
 
@@ -187,9 +189,11 @@ function KanbanColumnHeader({ colId, title, count }: { colId: string; title: str
 
 export function KanbanBoard({ node }: { node: FlatBlock }) {
   // Read children live from blockData so the board re-renders on changes
+  // Columns are heading blocks under the kanban container. After the v2
+  // schema refactor, kind is derived from content; paragraph-type gate is gone.
   const columns = Object.values(blockData.value)
     .filter(b => b.pageId === node.pageId && b.parent === node.id
-      && b.type === 'paragraph' && parseHeading(b.content).level)
+      && parseHeading(b.content).level)
     .sort((a, b) => a.order - b.order);
 
   function handleColumnDragOver(e: DragEvent, columnId: string) {
@@ -249,7 +253,7 @@ export function KanbanBoard({ node }: { node: FlatBlock }) {
           const { text: headingText } = parseHeading(col.content);
           const { text: title, hl } = parseAnnotations(headingText);
           const cards = Object.values(blockData.value)
-            .filter(b => b.pageId === node.pageId && b.parent === col.id && b.type !== 'table')
+            .filter(b => b.pageId === node.pageId && b.parent === col.id && b.layout !== 'grid')
             .sort((a, b) => a.order - b.order);
           return (
             <div

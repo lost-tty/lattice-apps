@@ -34,7 +34,7 @@ export function createTable(
   const next = siblings[idx + 1];
   const tableOrder = orderBetween(after.order, next?.order);
   const tableId = crypto.randomUUID();
-  saveBlock({ id: tableId, content: '', pageId: after.pageId, parent: after.parent, order: tableOrder, type: 'table' });
+  saveBlock({ id: tableId, content: '', pageId: after.pageId, parent: after.parent, order: tableOrder, layout: 'grid' });
 
   for (let r = 0; r < rows.length; r++) {
     for (let c = 0; c < rows[r].length; c++) {
