@@ -28,8 +28,6 @@ const decode = (b: Uint8Array): string => new TextDecoder().decode(b);
 export class DataStore {
   private store: Store | null = null;
   private items: Map<string, Item> = new Map();
-  private pendingWrites: Map<string, 'put' | 'delete'> = new Map();
-  private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private onSync: SyncCallback = () => {};
   private onData: DataCallback = () => {};
   private unwatch: (() => void) | null = null;
@@ -142,52 +140,17 @@ export class DataStore {
       if (k === 'id') continue;
       payload[k] = item[k];
     }
-    try {
-      this.onSync('syncing');
-      await this.store.Put({ key: encode(key), value: encode(JSON.stringify(payload)) });
-      this.pendingWrites.delete(id);
-      this.onSync(this.pendingWrites.size > 0 ? 'syncing' : 'idle');
-    } catch (e) {
-      console.error('[db] server put failed:', e);
-      this.pendingWrites.set(id, 'put');
-      this.onSync('error');
-      this.scheduleRetry();
-    }
+    this.onSync('syncing');
+    await this.store.Put({ key: encode(key), value: encode(JSON.stringify(payload)) });
+    this.onSync('idle');
   }
 
   private async serverDelete(id: string): Promise<void> {
     if (!this.store) return;
     const key = KEY_PREFIX + id;
-    try {
-      this.onSync('syncing');
-      await this.store.Delete({ key: encode(key) });
-      this.pendingWrites.delete(id);
-      this.onSync(this.pendingWrites.size > 0 ? 'syncing' : 'idle');
-    } catch (e) {
-      console.error('[db] server delete failed:', e);
-      this.pendingWrites.set(id, 'delete');
-      this.onSync('error');
-      this.scheduleRetry();
-    }
-  }
-
-  private scheduleRetry() {
-    if (this.retryTimer) return;
-    this.retryTimer = setTimeout(async () => {
-      this.retryTimer = null;
-      for (const [id, op] of this.pendingWrites) {
-        if (op === 'put') {
-          const item = this.items.get(id);
-          if (item) await this.serverPut(id, item);
-        } else {
-          await this.serverDelete(id);
-        }
-      }
-    }, 5000);
-  }
-
-  get pendingCount(): number {
-    return this.pendingWrites.size;
+    this.onSync('syncing');
+    await this.store.Delete({ key: encode(key) });
+    this.onSync('idle');
   }
 
   exportItems(): { id: string; fields: Record<string, unknown> }[] {

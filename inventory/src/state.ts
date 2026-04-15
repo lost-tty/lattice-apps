@@ -33,7 +33,6 @@ export const columnOrder = signal<string[]>([]);
 export const declaredColumns = signal<string[]>([]);
 export const sort = signal<SortState | null>(null);
 export const syncing = signal(false);
-export const pendingWrites = signal(0);
 export const filters = signal<Record<string, string[]>>({});
 
 // --- Modal/overlay signals ---
@@ -721,7 +720,6 @@ export function onGroupLevelsChanged() {
 
 export function setSyncStatus(status: SyncStatus) {
   syncing.value = status === 'syncing';
-  pendingWrites.value = dataStore?.pendingCount ?? 0;
 }
 
 // --- Auto-detect group-by ---
@@ -961,7 +959,6 @@ export function initState(itemsMap: Map<string, Item>, prefs?: ViewPrefs | null)
     selectedColumn.value = null;
     search.value = '';
     syncing.value = false;
-    pendingWrites.value = 0;
   });
 
   const newIndex = buildIndex([...itemsMap.values()], effectiveGL, undefined, f, gc, dc);
