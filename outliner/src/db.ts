@@ -51,7 +51,7 @@ export async function init(s: Store) {
   for (const e of (await store.List({ prefix: encode('block/') })).items) {
     try {
       const id = decode(e.key).slice(6); // 'block/'.length === 6
-      blocks[id] = { id, ...JSON.parse(decode(e.value)) };
+      blocks[id] = normalizeBlock({ id, ...JSON.parse(decode(e.value)) });
     } catch (err) { console.warn('[outliner] bad block:', err); }
   }
   blockData.value = blocks;
@@ -75,10 +75,24 @@ export async function init(s: Store) {
       blockData.value = rest;
     } else {
       try {
-        blockData.value = { ...blockData.value, [id]: { id, ...JSON.parse(decode(e.value)) } };
+        blockData.value = {
+          ...blockData.value,
+          [id]: normalizeBlock({ id, ...JSON.parse(decode(e.value)) }),
+        };
       } catch (err) { console.warn('[outliner] parse error:', err); }
     }
   });
+}
+
+/** Be liberal in what we accept from the store. Older writes used
+ *  `childLayout`; code-side is `layout`. Remap on ingress so callers
+ *  never see both spellings. */
+function normalizeBlock(raw: any): Block {
+  if (raw.childLayout !== undefined && raw.layout === undefined) {
+    raw.layout = raw.childLayout;
+  }
+  delete raw.childLayout;
+  return raw as Block;
 }
 
 // --- Tentative pages ---
