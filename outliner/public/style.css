@@ -292,6 +292,7 @@ body {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
+  transition: transform 0.15s;
   justify-content: center;
 }
 
@@ -299,6 +300,10 @@ body {
   width: 12px;
   height: 12px;
   stroke-width: 2.5;
+}
+
+.sidebar-group-arrow.open {
+  transform: rotate(90deg);
 }
 
 .sidebar-group-count {
@@ -627,6 +632,8 @@ body {
   font-size: 11px;
   line-height: 1.41;
   padding-top: 8px;
+  white-space: pre;
+  overflow-x: auto;
   padding-bottom: 8px;
 }
 
@@ -644,10 +651,12 @@ body {
   padding: 0 4px;
 }
 
-.ast-type-page   { color: var(--link); }
-.ast-type-bullet { color: var(--ast-bullet); }
-.ast-type-para   { color: var(--ast-para); }
-.ast-type-table  { color: var(--ast-table); }
+.ast-type-page    { color: var(--link); }
+.ast-type-bullet  { color: var(--ast-bullet); }
+.ast-type-para    { color: var(--ast-para); }
+.ast-type-table   { color: var(--ast-table); }
+.ast-type-heading { color: var(--highlight-text); }
+.ast-type-hrule   { color: var(--text-faint); }
 
 .ast-content {
   color: var(--text-muted);
@@ -744,8 +753,17 @@ body {
 
 /* --- Gutter (drag handle + collapse toggle, positioned in the indent gutter) --- */
 
+/* The gutter is a sibling of the block (not a child) so it stays
+   outside the SwipeRow and isn't clipped by its overflow:hidden. Both
+   live inside `.block-row`, which is the positioned ancestor. */
+.block-row {
+  position: relative;
+}
+
 .gutter {
   position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
   left: calc(var(--depth, 0) * var(--indent) - var(--bullet-size));
   width: var(--bullet-size);
   height: var(--bullet-size);
@@ -755,9 +773,10 @@ body {
   cursor: grab;
   border-radius: 4px;
   opacity: 0;
+  z-index: 3;
 }
 
-.block:hover > .gutter,
+.block-row:hover > .gutter,
 .gutter.has-children {
   opacity: 1;
 }
@@ -774,14 +793,16 @@ body {
   line-height: 1;
 }
 
-/* Has children: show chevron instead */
+/* Has children: show chevron SVG instead */
 .gutter.has-children::after {
-  content: '';
-  width: 0;
-  height: 0;
-  border-left: 5px solid var(--bullet);
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
+  content: none;
+}
+
+.gutter.has-children svg {
+  width: 12px;
+  height: 12px;
+  stroke: var(--bullet);
+  stroke-width: 2.5;
   transition: transform 0.15s;
   transform: rotate(90deg);
 }
@@ -790,7 +811,7 @@ body {
   cursor: pointer;
 }
 
-.gutter.collapsed::after {
+.gutter.collapsed svg {
   transform: rotate(0deg);
 }
 
@@ -1013,11 +1034,39 @@ s {
   padding-top: 24px;
 }
 
-.backlinks h3 {
+.backlinks-toggle {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-muted);
   margin-bottom: 12px;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.backlinks-arrow {
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  transition: transform 0.15s;
+}
+
+.backlinks-arrow svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2.5;
+}
+
+.backlinks-arrow.open {
+  transform: rotate(90deg);
+}
+
+.backlinks-count {
+  font-weight: 400;
+  margin-left: 6px;
 }
 
 .backlink {

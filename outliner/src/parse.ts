@@ -1,5 +1,7 @@
 // Pure text parsing functions. No signal or store dependencies.
 
+import type { Block, StoredBlock, TodoStatus } from './types';
+
 // --- Wiki links ---
 
 export function parseWikiLinks(text: string): Array<string | { page: string }> {
@@ -134,6 +136,64 @@ export function classifyBlock(content: string): BlockClassification {
   }
 
   return { kind: 'paragraph', text: content };
+}
+
+// --- Block boundary: storage <-> in-memory union ---
+
+/** Parse a stored block (raw markdown content + structural fields) into the
+ *  in-memory Block union. The single point where prefix interpretation
+ *  happens — every other module reads typed fields. */
+export function parseStoredBlock(stored: StoredBlock, id: string): Block {
+  const base = {
+    id,
+    pageId: stored.pageId,
+    parent: stored.parent,
+    order: stored.order,
+    col: stored.col,
+    collapsed: stored.collapsed,
+    createdAt: stored.createdAt,
+    updatedAt: stored.updatedAt,
+  };
+  let block: Block;
+  if (stored.layout === 'grid') block = { ...base, kind: 'grid' };
+  else {
+    const c = classifyBlock(stored.content);
+    if (c.kind === 'heading')      block = { ...base, kind: 'heading',   text: c.text, level: c.level as 1|2|3|4|5|6 };
+    else if (c.kind === 'bullet')  block = { ...base, kind: 'bullet',    text: c.text, todo: c.todo };
+    else if (c.kind === 'hrule')   block = { ...base, kind: 'hrule' };
+    else                           block = { ...base, kind: 'paragraph', text: c.text };
+  }
+  return block;
+}
+
+/** Format a todo status back to its content prefix (`"[ ] "`, `"TODO "`, etc).
+ *  Used by serializeBlock. */
+function formatTodo(t: TodoStatus): string {
+  if (t.syntax === 'checkbox') return t.status === 'done' ? '[x] ' : '[ ] ';
+  return t.status.toUpperCase() + ' ';
+}
+
+/** Serialize a Block back to its on-disk shape. Inverse of parseStoredBlock
+ *  (lossless except that NOW → DOING normalization is one-way). */
+export function serializeBlock(b: Block): StoredBlock {
+  const stored: StoredBlock = {
+    content: '',
+    pageId: b.pageId,
+    parent: b.parent,
+    order: b.order,
+    col: b.col,
+    collapsed: b.collapsed,
+    createdAt: b.createdAt,
+    updatedAt: b.updatedAt,
+  };
+  switch (b.kind) {
+    case 'grid':      stored.layout = 'grid'; stored.content = ''; break;
+    case 'hrule':     stored.content = '---'; break;
+    case 'paragraph': stored.content = b.text; break;
+    case 'heading':   stored.content = '#'.repeat(b.level) + ' ' + b.text; break;
+    case 'bullet':    stored.content = '- ' + (b.todo ? formatTodo(b.todo) : '') + b.text; break;
+  }
+  return stored;
 }
 
 // --- Journal date helpers ---

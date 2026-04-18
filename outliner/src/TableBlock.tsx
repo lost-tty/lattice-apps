@@ -5,7 +5,7 @@ import type { FlatBlock } from './db';
 import type { Block } from './types';
 import {
   activeBlockId, blockData,
-  saveBlock, deleteBlock,
+  saveBlock, deleteBlock, blockText,
 } from './db';
 import { beginUndo, commitUndo } from './undo';
 import { getTableGrid, insertTableRow, insertTableCol, reorderTableRow, reorderTableCol, deleteTableRow, deleteTableCol } from './table';
@@ -199,7 +199,7 @@ export function TableBlock({ node }: { node: FlatBlock }) {
                 {activeBlockId.value === cell.id ? (
                   <CellEditor cell={cell} />
                 ) : (
-                  <span><Content text={cell.content} fallback="&nbsp;" /></span>
+                  <span><Content text={blockText(cell)} fallback="&nbsp;" /></span>
                 )}
               </div>
             );
@@ -220,7 +220,7 @@ function CellEditor({ cell }: { cell: Block }) {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.textContent = cell.content;
+    el.textContent = blockText(cell);
     el.focus();
     const sel = window.getSelection()!;
     const range = document.createRange();
@@ -234,15 +234,15 @@ function CellEditor({ cell }: { cell: Block }) {
 
   function handleBlur() {
     if (!ref.current) return;
-    const content = ref.current.textContent || '';
-    if (content !== cell.content) saveBlock({ ...cell, content });
+    const text = ref.current.textContent || '';
+    if (cell.kind === 'paragraph' && text !== cell.text) saveBlock({ ...cell, text });
     if (activeBlockId.value === cell.id) activeBlockId.value = null;
   }
 
   function flushContent() {
     const el = ref.current!;
-    const content = el.textContent || '';
-    if (content !== cell.content) saveBlock({ ...cell, content });
+    const text = el.textContent || '';
+    if (cell.kind === 'paragraph' && text !== cell.text) saveBlock({ ...cell, text });
   }
 
   function handleKeyDown(e: KeyboardEvent) {

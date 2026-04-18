@@ -28,7 +28,7 @@ export function PageTitleBlock({
         label: 'Carry forward all to today',
         icon: <IconArrowRight />,
         onAction: () => {
-          const targetPageId = getOrCreatePage(todaySlug(), 'journals');
+          const targetPageId = getOrCreatePage(todaySlug());
           carryForwardAll(pageId, targetPageId);
         },
       });

@@ -9,10 +9,10 @@ import {
   pageList, currentPage, navigateTo, navigateById, deletePage,
   pageTitle, getTagCounts,
 } from './db';
-import { todaySlug } from './parse';
+import { todaySlug, isJournalSlug } from './parse';
 import { exportAllPages, importAllPages } from './importExport';
 import { buildTar, parseTar } from './tar';
-import { IconDownload, IconUpload, IconChevronRight, IconChevronDown, IconCalendar, IconFile } from './Icons';
+import { IconDownload, IconUpload, IconChevronRight, IconCalendar, IconFile } from './Icons';
 import type { Page } from './types';
 
 interface MonthGroup { label: string; monthName: string; key: string; pages: Page[] }
@@ -93,7 +93,7 @@ function SectionHeader({ title, open, onToggle, count }: {
 }) {
   return (
     <h3 class="sidebar-section-header" onClick={onToggle}>
-      <span class="sidebar-group-arrow">{open ? <IconChevronDown /> : <IconChevronRight />}</span>
+      <span class={`sidebar-group-arrow${open ? ' open' : ''}`}><IconChevronRight /></span>
       {title}
       {count != null && count > 0 && <span class="sidebar-group-count">{count}</span>}
     </h3>
@@ -107,22 +107,14 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const currentId = currentPage.value;
   const todayTitle = todaySlug();
 
-  const journals = pages.filter(p => p.folder === 'journals');
-  const rootPages = pages.filter(p => !p.folder);
+  const journals = pages.filter(p => isJournalSlug(p.title));
+  const rootPages = pages.filter(p => !isJournalSlug(p.title));
   const todayPage = journals.find(p => p.title === todayTitle);
 
   const pastJournals = journals.filter(p => p.title !== todayTitle);
   const recentJournals = pastJournals.slice(0, 7);
   const olderJournals = pastJournals.slice(7);
   const { currentYearMonths, pastYears, decades } = groupOlderJournals(olderJournals);
-
-  const otherFolders = new Map<string, Page[]>();
-  for (const p of pages) {
-    if (p.folder && p.folder !== 'journals') {
-      if (!otherFolders.has(p.folder)) otherFolders.set(p.folder, []);
-      otherFolders.get(p.folder)!.push(p);
-    }
-  }
 
   const tagCounts = getTagCounts();
 
@@ -139,7 +131,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
     const mdFiles = items.filter(f => f.name.endsWith('.md') || f.name.endsWith('.markdown') || f.name.endsWith('.txt'));
     if (mdFiles.length === 0) return;
     Promise.all(mdFiles.map(f => f.text().then(content => ({
-      path: `pages/${f.name}`,
+      path: f.name,
       content,
     })))).then(files => importAllPages(files));
   }
@@ -239,16 +231,6 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
         </div>
       )}
 
-      {/* --- Other folders --- */}
-      {[...otherFolders.entries()].map(([folder, folderPages]) => (
-        <div key={folder} class="sidebar-section">
-          <h3>{folder}</h3>
-          {folderPages.map(page => (
-            <PageRow key={page.id} page={page} currentId={currentId} />
-          ))}
-        </div>
-      ))}
-
       {/* --- Actions --- */}
       <div class="sidebar-section sidebar-actions">
         <button class="sidebar-action" onClick={handleExportAll} title="Export all pages as .tar">
@@ -298,7 +280,7 @@ function MonthGroupRow({ label, pages, currentId }: {
   return (
     <div class="sidebar-month-group">
       <button class="sidebar-item sidebar-group-toggle" onClick={() => setOpen(!open)}>
-        <span class="sidebar-group-arrow">{open ? <IconChevronDown /> : <IconChevronRight />}</span>
+        <span class={`sidebar-group-arrow${open ? ' open' : ''}`}><IconChevronRight /></span>
         {label}
         <span class="sidebar-group-count">{pages.length}</span>
       </button>
@@ -322,7 +304,7 @@ function DecadeGroupRow({ group, currentId }: { group: DecadeGroup; currentId: s
   return (
     <div class="sidebar-year-group">
       <button class="sidebar-item sidebar-group-toggle" onClick={() => setOpen(!open)}>
-        <span class="sidebar-group-arrow">{open ? <IconChevronDown /> : <IconChevronRight />}</span>
+        <span class={`sidebar-group-arrow${open ? ' open' : ''}`}><IconChevronRight /></span>
         {group.decade}
         <span class="sidebar-group-count">{group.totalCount}</span>
       </button>
@@ -341,7 +323,7 @@ function YearGroupRow({ group, currentId, indent = 0 }: { group: YearGroup; curr
   return (
     <div class="sidebar-year-group">
       <button class={`sidebar-item sidebar-group-toggle${indent ? ` sidebar-indent-${indent}` : ''}`} onClick={() => setOpen(!open)}>
-        <span class="sidebar-group-arrow">{open ? <IconChevronDown /> : <IconChevronRight />}</span>
+        <span class={`sidebar-group-arrow${open ? ' open' : ''}`}><IconChevronRight /></span>
         {group.year}
         <span class="sidebar-group-count">{group.totalCount}</span>
       </button>
@@ -378,7 +360,7 @@ function MonthInYear({ month, currentId, indent = 0 }: { month: MonthGroup; curr
   return (
     <div>
       <button class={`sidebar-item sidebar-group-toggle sidebar-indent-${toggleIndent}`} onClick={() => setOpen(!open)}>
-        <span class="sidebar-group-arrow">{open ? <IconChevronDown /> : <IconChevronRight />}</span>
+        <span class={`sidebar-group-arrow${open ? ' open' : ''}`}><IconChevronRight /></span>
         {shortLabel}
         <span class="sidebar-group-count">{month.pages.length}</span>
       </button>

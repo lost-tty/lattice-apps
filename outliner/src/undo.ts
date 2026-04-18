@@ -10,6 +10,12 @@ import { currentPage, blockData, saveBlock, registerUndoHooks, setUndoSuppressed
 type Patch = { id: string; before: Block | null; after: Block | null };
 type UndoEntry = { label: string; patches: Patch[] };
 
+/** Strip volatile timestamp fields so equality compares structural changes only. */
+function stripTimestamps(b: Block): Block {
+  const { createdAt, updatedAt, ...rest } = b as any;
+  return rest;
+}
+
 const MAX_UNDO = 200;
 
 const hasSessionStorage = typeof sessionStorage !== 'undefined';
@@ -65,12 +71,7 @@ let groupPageId = '';
 
 /** Record a block mutation. Called via the patch hook from saveBlock/deleteBlock. */
 function recordPatch(id: string, before: Block | null, after: Block | null) {
-  if (before && after &&
-    before.content === after.content &&
-    before.layout === after.layout &&
-    before.parent === after.parent &&
-    before.order === after.order &&
-    before.col === after.col) return;
+  if (before && after && JSON.stringify(stripTimestamps(before)) === JSON.stringify(stripTimestamps(after))) return;
   const pageId = before?.pageId ?? (after as Block).pageId;
   if (!activeGroup) {
     const stack = getUndoStack(pageId);

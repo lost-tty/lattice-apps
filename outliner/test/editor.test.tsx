@@ -8,21 +8,31 @@ import {
   activeBlockId, currentPage,
 } from '../src/db';
 
+import { parseStoredBlock } from '../src/parse';
+
 /** Test-only wrapper: pre-v2 fixtures get migrated inline so tests keep
  *  working. See the identical wrapper in test/db.test.ts for rationale. */
 function saveBlock(block: any) {
-  const { type, content = '', layout, ...rest } = block;
-  if (type === 'table') return _rawSaveBlock({ ...rest, content, layout: 'grid' });
-  if (type === 'paragraph') return _rawSaveBlock({ ...rest, content, layout });
-  const alreadyMigrated =
-    content === '' || content === '- ' || content.startsWith('- ') ||
-    /^#{1,6} /.test(content) || content === '---';
-  const nextContent = alreadyMigrated ? content : '- ' + content;
-  return _rawSaveBlock({ ...rest, content: nextContent, layout });
+  const { id, type, content = '', layout, ...rest } = block;
+  let storedContent = content;
+  let storedLayout = layout;
+  if (type === 'table') {
+    storedContent = '';
+    storedLayout = 'grid';
+  } else if (type === 'paragraph') {
+    // bare content
+  } else {
+    const alreadyMigrated =
+      content === '' || content === '- ' || content.startsWith('- ') ||
+      /^#{1,6} /.test(content) || content === '---';
+    storedContent = alreadyMigrated ? content : '- ' + content;
+  }
+  return _rawSaveBlock(parseStoredBlock({ ...rest, content: storedContent, layout: storedLayout }, id));
 }
 import { createBlockAfter, joinBlockWithPrevious } from '../src/blockOps';
 import { continuationContent } from '../src/editorState';
 import { Editor } from '../src/Editor';
+import type { Block } from '../src/types';
 
 function flush(): Promise<void> {
   return new Promise(r => setTimeout(r, 10));
@@ -103,7 +113,7 @@ describe('Editor focus', () => {
 
     const mergedDiv = document.querySelector('.block-content.editing') as HTMLElement;
     expect(mergedDiv).not.toBeNull();
-    expect(blockData.value['1'].content).toBe('- helloworld');
+    expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'helloworld' });
     expect(mergedDiv.textContent).toBe('- helloworld');
     expect(document.activeElement).toBe(mergedDiv);
   });
@@ -137,6 +147,67 @@ describe('Editor focus', () => {
   });
 });
 
+describe('continuationContent', () => {
+  const b = (content: string): Block =>
+    parseStoredBlock({ content, pageId: 'p', parent: null, order: 0 }, '1');
+
+  it('plain bullet → empty bullet', () => {
+    expect(continuationContent(b('- foo'))).toBe('- ');
+  });
+
+  it('empty bullet stays empty bullet', () => {
+    expect(continuationContent(b('- '))).toBe('- ');
+  });
+
+  it('unchecked checkbox carries forward', () => {
+    expect(continuationContent(b('- [ ] task'))).toBe('- [ ] ');
+  });
+
+  it('checked checkbox continues as unchecked', () => {
+    expect(continuationContent(b('- [x] task'))).toBe('- [ ] ');
+  });
+
+  it('TODO keyword carries forward', () => {
+    expect(continuationContent(b('- TODO task'))).toBe('- TODO ');
+  });
+
+  it('DOING keyword carries forward', () => {
+    expect(continuationContent(b('- DOING task'))).toBe('- DOING ');
+  });
+
+  it('LATER keyword carries forward', () => {
+    expect(continuationContent(b('- LATER task'))).toBe('- LATER ');
+  });
+
+  it('WAIT keyword carries forward', () => {
+    expect(continuationContent(b('- WAIT task'))).toBe('- WAIT ');
+  });
+
+  it('NOW normalizes to DOING on continuation', () => {
+    expect(continuationContent(b('- NOW task'))).toBe('- DOING ');
+  });
+
+  it('DONE drops back to plain bullet', () => {
+    expect(continuationContent(b('- DONE task'))).toBe('- ');
+  });
+
+  it('CANCELLED drops back to plain bullet', () => {
+    expect(continuationContent(b('- CANCELLED task'))).toBe('- ');
+  });
+
+  it('heading produces empty content', () => {
+    expect(continuationContent(b('# Section'))).toBe('');
+  });
+
+  it('paragraph produces empty content', () => {
+    expect(continuationContent(b('plain prose'))).toBe('');
+  });
+
+  it('hrule produces empty content', () => {
+    expect(continuationContent(b('---'))).toBe('');
+  });
+});
+
 describe('Continuation template', () => {
   it('checkbox block generates "- [ ] " template on Enter at end', async () => {
     const pageId = getOrCreatePage('p');
@@ -152,8 +223,7 @@ describe('Continuation template', () => {
     expect(editDiv.textContent).toBe('- [ ] Item');
 
     // Simulate Enter at end: keep current block, create new with continuation template
-    const node = blockData.value['1'];
-    const newContent = continuationContent(node);
+    const newContent = continuationContent(blockData.value['1']);
     const newId = createBlockAfter('1', newContent);
     activeBlockId.value = newId;
 

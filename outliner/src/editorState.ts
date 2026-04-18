@@ -11,6 +11,17 @@ import type { Block, BlockNode } from './types';
 import { activeBlockId, blockData } from './db';
 import { classifyBlock, parseHeading } from './parse';
 
+// --- contentEditable input normalization ---
+
+/** Normalize editor textContent to canonical markdown. Browsers replace
+ *  typed spaces with NBSP (U+00A0) in a contentEditable when the space
+ *  would otherwise be collapsed by HTML whitespace rules — most visibly
+ *  the trailing space after a freshly-typed `"- "` / `"# "` prefix. Undo
+ *  it here so the strict markdown parser downstream sees regular spaces. */
+export function normalizeEditorInput(text: string): string {
+  return text.replace(/\u00a0/g, ' ');
+}
+
 // --- Mutable state ---
 
 export const shared = {
@@ -131,21 +142,21 @@ export function getVisualDepth(node: FlatBlock): number {
   let pid = node.parent;
   while (pid) {
     const p = blockData.value[pid];
-    if (p && parseHeading(p.content).level) depth--;
+    if (p && p.kind === 'heading') depth--;
     pid = p?.parent ?? null;
   }
   return depth;
 }
 
-/** Return the content template for a new sibling of this block.
- *  Bullets continue as bullets; checkboxes continue unchecked; todo keywords
- *  carry over with the bullet prefix. Non-bullets return empty. */
+/** Return the full-content template (including any prefix) for a new
+ *  sibling created by pressing Enter at the end of `block`. Bullets
+ *  continue as bullets; checkboxes continue unchecked; todo keywords
+ *  carry over. Non-bullets return empty. */
 export function continuationContent(block: Block): string {
-  const k = classifyBlock(block.content);
-  if (k.kind !== 'bullet') return '';
-  if (!k.todo) return '- ';
-  if (k.todo.syntax === 'checkbox') return '- [ ] ';
-  const s = k.todo.status;
+  if (block.kind !== 'bullet') return '';
+  if (!block.todo) return '- ';
+  if (block.todo.syntax === 'checkbox') return '- [ ] ';
+  const s = block.todo.status;
   if (s === 'done' || s === 'cancelled') return '- ';
   return `- ${s.toUpperCase()} `;
 }

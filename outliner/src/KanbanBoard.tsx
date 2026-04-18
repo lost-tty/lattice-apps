@@ -3,7 +3,7 @@ import { Content } from './renderContent';
 import type { FlatBlock } from './db';
 import {
   activeBlockId, blockData,
-  saveBlock, deleteBlock,
+  saveBlock, deleteBlock, blockToMarkdown, blockText, markdownToBlock,
 } from './db';
 import { beginUndo, commitUndo } from './undo';
 import { parseHeading, parseAnnotations, parseTodoStatus } from './parse';
@@ -19,7 +19,8 @@ function KanbanCard({ blockId }: { blockId: string }) {
   const isActive = activeBlockId.value === blockId;
   const ref = useRef<HTMLDivElement>(null);
 
-  const { status, text: statusText } = parseTodoStatus(block.content);
+  const cardText = blockText(block);
+  const { status, text: statusText } = parseTodoStatus(cardText);
   const { text: viewText } = parseHeading(statusText);
 
   useLayoutEffect(() => {
@@ -27,19 +28,23 @@ function KanbanCard({ blockId }: { blockId: string }) {
     const el = ref.current;
     const activation = shared.pendingActivation?.blockId === blockId ? shared.pendingActivation : null;
     shared.pendingActivation = null;
-    el.textContent = block.content;
+    el.textContent = blockToMarkdown(block);
     el.focus();
     setCursor(el, activation?.cursor ?? 'end', 0);
   }, [isActive]);
 
   function saveFromEditor() {
-    const content = ref.current?.textContent || '';
+    const md = ref.current?.textContent || '';
     const current = blockData.value[blockId];
     if (!current) return;
-    if (content !== current.content) {
-      // Cards stay bullets; store with canonical `- ` prefix.
-      const bulletContent = content.startsWith('- ') ? content : '- ' + content;
-      saveBlock({ ...current, content: bulletContent });
+    // Cards stay bullets: parse the editor text and force kind='bullet'
+    // regardless of what the user typed (e.g. if they deleted the prefix).
+    const overlay = markdownToBlock(md) as { kind: string; text?: string; todo?: any };
+    const text = overlay.text ?? '';
+    const todo = overlay.kind === 'bullet' ? overlay.todo : undefined;
+    const next = { ...current, kind: 'bullet' as const, text, todo };
+    if (blockToMarkdown(next) !== blockToMarkdown(current)) {
+      saveBlock(next);
     }
   }
 
@@ -130,15 +135,13 @@ function KanbanColumnHeader({ colId, title, count }: { colId: string; title: str
     if (!ref.current) return;
     const newTitle = ref.current.textContent?.trim() || title;
     const block = blockData.value[colId];
-    if (!block) return;
-    const { level } = parseHeading(block.content);
-    if (!level) return;
-    // Rebuild heading content preserving annotations
-    const { kanban, hl } = parseAnnotations(parseHeading(block.content).text);
-    let content = '#'.repeat(level) + ' ' + newTitle;
-    if (kanban) content += ' [.kanban]';
-    if (hl != null) content += ` [.hl-${hl}]`;
-    if (content !== block.content) saveBlock({ ...block, content });
+    if (!block || block.kind !== 'heading') return;
+    // Rebuild heading text preserving annotations
+    const { kanban, hl } = parseAnnotations(block.text);
+    let text = newTitle;
+    if (kanban) text += ' [.kanban]';
+    if (hl != null) text += ` [.hl-${hl}]`;
+    if (text !== block.text) saveBlock({ ...block, text });
     setEditing(false);
   }
 
@@ -192,8 +195,7 @@ export function KanbanBoard({ node }: { node: FlatBlock }) {
   // Columns are heading blocks under the kanban container. After the v2
   // schema refactor, kind is derived from content; paragraph-type gate is gone.
   const columns = Object.values(blockData.value)
-    .filter(b => b.pageId === node.pageId && b.parent === node.id
-      && parseHeading(b.content).level)
+    .filter(b => b.pageId === node.pageId && b.parent === node.id && b.kind === 'heading')
     .sort((a, b) => a.order - b.order);
 
   function handleColumnDragOver(e: DragEvent, columnId: string) {
@@ -250,10 +252,10 @@ export function KanbanBoard({ node }: { node: FlatBlock }) {
     <div class="kanban-board">
       <div class="kanban-columns">
         {columns.map(col => {
-          const { text: headingText } = parseHeading(col.content);
+          const headingText = col.kind === 'heading' ? col.text : '';
           const { text: title, hl } = parseAnnotations(headingText);
           const cards = Object.values(blockData.value)
-            .filter(b => b.pageId === node.pageId && b.parent === col.id && b.layout !== 'grid')
+            .filter(b => b.pageId === node.pageId && b.parent === col.id && b.kind !== 'grid')
             .sort((a, b) => a.order - b.order);
           return (
             <div
@@ -272,7 +274,7 @@ export function KanbanBoard({ node }: { node: FlatBlock }) {
                 class="kanban-add-card"
                 onClick={() => {
                   beginUndo('add card');
-                  const newId = createChildBlock(col.id, '', 'bullet');
+                  const newId = createChildBlock(col.id, '- ');
                   commitUndo();
                   activateBlock(newId, 'start');
                 }}
@@ -283,10 +285,11 @@ export function KanbanBoard({ node }: { node: FlatBlock }) {
         <button
           class="kanban-add-column"
           onClick={() => {
-            const level = (parseHeading(node.content).level ?? 1) + 1;
+            const baseLevel = node.kind === 'heading' ? node.level : 1;
+            const level = baseLevel + 1;
             const prefix = '#'.repeat(level) + ' ';
             beginUndo('add column');
-            const newId = createChildBlock(node.id, prefix + 'New column', 'paragraph');
+            const newId = createChildBlock(node.id, prefix + 'New column');
             commitUndo();
             activateBlock(newId, 'start');
           }}

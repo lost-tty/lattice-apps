@@ -77,7 +77,7 @@ export function JournalView({ startPageId }: { startPageId: string }) {
             data-page-id={page.id}
             ref={page.id === startPageId ? anchorRef : undefined}
           >
-            <PageSection pageId={page.id} titleClickable />
+            <PageSection pageId={page.id} titleClickable journal />
           </div>
         ))}
       </div>

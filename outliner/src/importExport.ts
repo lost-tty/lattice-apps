@@ -5,6 +5,7 @@ import {
   blockData, pageList, saveBlock, deleteBlock,
   buildTree, flattenTree, getOrCreatePage, validateTree,
   getSiblings, nextOrder, orderBetween, maybeRebalance,
+  markdownToBlock, blockToMarkdown, blockText,
 } from './db';
 import { isTableRow, isTableSeparator } from './parse';
 import { getTableGrid } from './table';
@@ -167,7 +168,7 @@ export function insertBlocksAfter(
       const tableId = crypto.randomUUID();
       if (d === 0) {
         const order = orderBetween(prevAtDepth[0].order, anchorNextOrder);
-        saveBlock({ id: tableId, content: '', pageId, parent: anchor.parent, order, layout: 'grid' });
+        saveBlock({ id: tableId, kind: 'grid', pageId, parent: anchor.parent, order });
         prevAtDepth[0] = { id: tableId, order };
       } else {
         const parentEntry = prevAtDepth[d - 1];
@@ -175,14 +176,14 @@ export function insertBlocksAfter(
         const children = Object.values(blockData.value)
           .filter(b => b.pageId === pageId && b.parent === parentEntry.id);
         const order = nextOrder(children);
-        saveBlock({ id: tableId, content: '', pageId, parent: parentEntry.id, order, layout: 'grid' });
+        saveBlock({ id: tableId, kind: 'grid', pageId, parent: parentEntry.id, order });
         prevAtDepth[d] = { id: tableId, order };
       }
-      // Create cell blocks
+      // Create cell blocks (paragraphs with bare text)
       for (let r = 0; r < rows.length; r++) {
         for (let c = 0; c < rows[r].length; c++) {
           const cellId = crypto.randomUUID();
-          saveBlock({ id: cellId, content: rows[r][c], pageId, parent: tableId, order: r, col: c });
+          saveBlock({ id: cellId, kind: 'paragraph', text: rows[r][c], pageId, parent: tableId, order: r, col: c });
         }
       }
       lastId = tableId;
@@ -193,13 +194,14 @@ export function insertBlocksAfter(
     const d = item.relativeDepth;
     const id = crypto.randomUUID();
 
-    // Translate parser kind → stored content: bullets get the `- ` prefix;
-    // paragraphs (incl. hrules, headings) store bare content as-is.
-    const content = (item.type ?? 'bullet') === 'bullet' ? '- ' + item.content : item.content;
+    // Translate parser kind → markdown content for parsing into a Block:
+    // bullets get the `- ` prefix; paragraphs (incl. hrules, headings) stay bare.
+    const md = (item.type ?? 'bullet') === 'bullet' ? '- ' + item.content : item.content;
+    const overlay = markdownToBlock(md);
 
     if (d === 0) {
       const order = orderBetween(prevAtDepth[0].order, anchorNextOrder);
-      saveBlock({ id, content, pageId, parent: anchor.parent, order });
+      saveBlock({ id, pageId, parent: anchor.parent, order, ...overlay } as Block);
       prevAtDepth[0] = { id, order };
     } else {
       const parentEntry = prevAtDepth[d - 1];
@@ -207,7 +209,7 @@ export function insertBlocksAfter(
       const children = Object.values(blockData.value)
         .filter(b => b.pageId === pageId && b.parent === parentEntry.id);
       const order = nextOrder(children);
-      saveBlock({ id, content, pageId, parent: parentEntry.id, order });
+      saveBlock({ id, pageId, parent: parentEntry.id, order, ...overlay } as Block);
       prevAtDepth[d] = { id, order };
     }
 
@@ -229,8 +231,6 @@ export function insertBlocksAfter(
 export function exportPage(pageId: string): string {
   const flat = flattenTree(buildTree(pageId));
   let headingDepth = 0;
-  const isStructural = (c: string) => /^#{1,6} /.test(c) || c === '---';
-  const isBullet = (c: string) => c === '- ' || c.startsWith('- ');
   const tableCellIds = new Set<string>();
   const lines: string[] = [];
   let prevKind: 'bullet' | 'paragraph' | 'structural' | 'table' | null = null;
@@ -240,13 +240,13 @@ export function exportPage(pageId: string): string {
     const b = flat[i];
     if (tableCellIds.has(b.id)) continue;
 
-    if (b.layout === 'grid') {
+    if (b.kind === 'grid') {
       if (prevKind && prevKind !== 'structural') lines.push('');
       const grid = getTableGrid(b.id);
       for (const cell of grid.flatMap(r => r.cells)) tableCellIds.add(cell.id);
       for (let r = 0; r < grid.length; r++) {
         const row = grid[r];
-        lines.push('| ' + row.cells.map(c => c.content).join(' | ') + ' |');
+        lines.push('| ' + row.cells.map(c => blockText(c)).join(' | ') + ' |');
         if (r === 0) {
           lines.push('| ' + row.cells.map(() => '---').join(' | ') + ' |');
         }
@@ -256,12 +256,12 @@ export function exportPage(pageId: string): string {
       continue;
     }
 
-    if (isStructural(b.content)) {
+    if (b.kind === 'heading' || b.kind === 'hrule') {
       if (lines.length > 0) lines.push('');
       headingDepth = b.depth + 1;
-      lines.push(b.content);
+      lines.push(blockToMarkdown(b));
       const next = flat[i + 1];
-      if (next && !tableCellIds.has(next.id) && !isStructural(next.content)) {
+      if (next && !tableCellIds.has(next.id) && !(next.kind === 'heading' || next.kind === 'hrule')) {
         lines.push('');
       }
       prevKind = 'structural';
@@ -269,7 +269,7 @@ export function exportPage(pageId: string): string {
       continue;
     }
 
-    if (isBullet(b.content)) {
+    if (b.kind === 'bullet') {
       if (prevKind === 'paragraph' || prevKind === 'table') {
         lines.push('');
       }
@@ -277,8 +277,7 @@ export function exportPage(pageId: string): string {
       const bulletDepth = Math.min(rawDepth, maxBulletDepth + 1);
       maxBulletDepth = bulletDepth;
       const prefix = '  '.repeat(Math.max(0, bulletDepth));
-      const contentLines = b.content.split('\n');
-      // Content already has `- ` prefix; emit with indent in front.
+      const contentLines = blockToMarkdown(b).split('\n');
       lines.push(`${prefix}${contentLines[0]}`);
       for (let j = 1; j < contentLines.length; j++) {
         lines.push(`${prefix}  ${contentLines[j]}`);
@@ -286,7 +285,7 @@ export function exportPage(pageId: string): string {
       prevKind = 'bullet';
     } else {
       // Paragraph (bare text).
-      if (b.content === '') {
+      if (b.text === '') {
         if (prevKind) lines.push('');
         prevKind = null;
         continue;
@@ -295,7 +294,7 @@ export function exportPage(pageId: string): string {
         lines.push('');
       }
       const indent = '  '.repeat(Math.max(0, b.depth - headingDepth));
-      for (const cl of b.content.split('\n')) {
+      for (const cl of b.text.split('\n')) {
         lines.push(`${indent}${cl}`);
       }
       prevKind = 'paragraph';
@@ -308,19 +307,17 @@ export function exportPage(pageId: string): string {
 /** Export all pages as an array of {path, content} entries suitable for zipping. */
 export function exportAllPages(): Array<{ path: string; content: string }> {
   return pageList.value.map(page => {
-    const folder = page.folder === 'journals' ? 'journals' : 'pages';
-    const filename = `${page.slug}.md`;
-    return { path: `${folder}/${filename}`, content: exportPage(page.id) };
+    return { path: `${page.slug}.md`, content: exportPage(page.id) };
   });
 }
 
-/** Import a set of {path, content} entries (as produced by parseTar / exportAllPages). */
+/** Import a set of {path, content} entries (as produced by parseTar / exportAllPages).
+ *  Accepts both flat files (slug.md) and legacy folder layout (journals/slug.md, pages/slug.md). */
 export function importAllPages(files: Array<{ path: string; content: string }>): void {
   for (const file of files) {
     const parts = file.path.split('/');
     const basename = parts[parts.length - 1].replace(/\.md$/, '');
-    const folder = parts.length > 1 && parts[0] === 'journals' ? 'journals' : undefined;
-    const pageId = getOrCreatePage(basename, folder);
+    const pageId = getOrCreatePage(basename);
     importPage(pageId, file.content);
   }
 }
@@ -352,11 +349,11 @@ export function importPage(pageId: string, markdown: string): void {
       const parent = depth > 0 ? (lastIdAtDepth[depth - 1] ?? null) : null;
       if (orderAtDepth[depth] === undefined) orderAtDepth[depth] = 0;
       const tableId = crypto.randomUUID();
-      saveBlock({ id: tableId, content: '', pageId, parent, order: orderAtDepth[depth], layout: 'grid' });
+      saveBlock({ id: tableId, kind: 'grid', pageId, parent, order: orderAtDepth[depth] });
       for (let r = 0; r < rows.length; r++) {
         for (let c = 0; c < rows[r].length; c++) {
           const cellId = crypto.randomUUID();
-          saveBlock({ id: cellId, content: rows[r][c], pageId, parent: tableId, order: r, col: c });
+          saveBlock({ id: cellId, kind: 'paragraph', text: rows[r][c], pageId, parent: tableId, order: r, col: c });
         }
       }
       lastIdAtDepth[depth] = tableId;
@@ -370,9 +367,9 @@ export function importPage(pageId: string, markdown: string): void {
     const parent = depth > 0 ? (lastIdAtDepth[depth - 1] ?? null) : null;
     if (orderAtDepth[depth] === undefined) orderAtDepth[depth] = 0;
     const id = crypto.randomUUID();
-    // Bullets store with the `- ` prefix in content; paragraphs stay bare.
-    const storedContent = (type ?? 'bullet') === 'bullet' ? '- ' + content : content;
-    saveBlock({ id, content: storedContent, pageId, parent, order: orderAtDepth[depth] });
+    const md = (type ?? 'bullet') === 'bullet' ? '- ' + content : content;
+    const overlay = markdownToBlock(md);
+    saveBlock({ id, pageId, parent, order: orderAtDepth[depth], ...overlay } as Block);
     lastIdAtDepth[depth] = id;
     lastIdAtDepth.length = depth + 1;
     orderAtDepth[depth]++;

@@ -39,9 +39,7 @@ export const IconChevronRight = () => (
   <svg {...props}><polyline points="9 18 15 12 9 6" /></svg>
 );
 
-export const IconChevronDown = () => (
-  <svg {...props}><polyline points="6 9 12 15 18 9" /></svg>
-);
+
 
 export const IconCalendar = () => (
   <svg {...props}>

@@ -1,14 +1,14 @@
 import type { FlatBlock } from './db';
-import type { Block } from './types';
 import { Toolbar } from '@ui';
 import {
-  activeBlockId, blockData,
-  buildTree, flattenTree, saveBlock,
-  getBacklinks, navigateById,
+  activeBlockId, blockData, pageData,
+  buildTree, flattenTree,
+  getBacklinks, navigateById, blockText,
+  isJournalPage,
 } from './db';
 import { beginUndo, commitUndo } from './undo';
-import { parseHeading, parseAnnotations } from './parse';
-import { createBlockAfter, hasIncompleteTodos } from './blockOps';
+import { parseAnnotations, isJournalSlug } from './parse';
+import { createBlockAfter, appendSiblingAt, hasIncompleteTodos } from './blockOps';
 import { getTableGrid } from './table';
 import { exportPage } from './importExport';
 import { activateBlock, collectDescendantIds, debugPanels } from './editorState';
@@ -29,12 +29,11 @@ function renderBlockList(flat: FlatBlock[]) {
   // Collect IDs to skip: grid cells (rendered by TableBlock), and descendants
   // of kanban headings (rendered by KanbanBoard).
   for (const node of flat) {
-    if (node.layout === 'grid') {
+    if (node.kind === 'grid') {
       const grid = getTableGrid(node.id);
       for (const row of grid) for (const cell of row.cells) cellIds.add(cell.id);
     }
-    const heading = parseHeading(node.content);
-    if (heading.level && parseAnnotations(heading.text).kanban) {
+    if (node.kind === 'heading' && parseAnnotations(node.text).kanban) {
       for (const id of collectDescendantIds(node)) kanbanIds.add(id);
     }
   }
@@ -42,12 +41,11 @@ function renderBlockList(flat: FlatBlock[]) {
   const elements: any[] = [];
   for (const node of flat) {
     if (cellIds.has(node.id) || kanbanIds.has(node.id)) continue;
-    if (node.layout === 'grid') {
+    if (node.kind === 'grid') {
       elements.push(<TableBlock key={node.id} node={node} />);
       continue;
     }
-    const heading = parseHeading(node.content);
-    if (heading.level && parseAnnotations(heading.text).kanban) {
+    if (node.kind === 'heading' && parseAnnotations(node.text).kanban) {
       elements.push(<BlockItem key={node.id} node={node} />);
       elements.push(<KanbanBoard key={`kanban-${node.id}`} node={node} />);
       continue;
@@ -59,11 +57,22 @@ function renderBlockList(flat: FlatBlock[]) {
 
 // --- Page section (shared between single page and journal views) ---
 
-export function PageSection({ pageId, titleClickable }: { pageId: string; titleClickable?: boolean }) {
+export function PageSection({ pageId, titleClickable, journal }: { pageId: string; titleClickable?: boolean; journal?: boolean }) {
   const tree = buildTree(pageId);
   const flat = flattenTree(tree);
   const backlinks = getBacklinks(pageId);
   const hasPageIncompleteTodos = flat.some(b => hasIncompleteTodos(b.id));
+
+  // In journal view, auto-collapse backlinks when all references come from
+  // journal pages within 14 days of *this* page (typical carry-forward noise).
+  const pageTime = journal ? new Date(pageData.value[pageId]?.title ?? '').getTime() : NaN;
+  const autoCollapse = journal && !isNaN(pageTime) && backlinks.length > 0 && backlinks.every(({ block }) => {
+    if (!isJournalPage(block.pageId)) return false;
+    const title = pageData.value[block.pageId]?.title;
+    if (!title || !isJournalSlug(title)) return false;
+    const diff = Math.abs(new Date(title).getTime() - pageTime);
+    return diff < 14 * 86400_000;
+  });
 
   // Both the inline toolbar (here) and the mobile topbar toolbar (rendered
   // by App) call the same builder; debug-panel state lives on the
@@ -78,7 +87,7 @@ export function PageSection({ pageId, titleClickable }: { pageId: string; titleC
       <div class="page-section-main">
         <Toolbar groups={toolbarGroups} class="page-toolbar" />
         {debugPanel === 'markdown' && <DebugPanel header="Markdown"><pre class="markdown-panel-content">{exportPage(pageId)}</pre></DebugPanel>}
-        {debugPanel === 'ast' && <DebugPanel header="AST"><ASTContent tree={tree} /></DebugPanel>}
+        {debugPanel === 'ast' && <DebugPanel header="AST"><ASTContent tree={tree} pageId={pageId} /></DebugPanel>}
         <PageTitleBlock
           pageId={pageId}
           titleClickable={titleClickable}
@@ -98,15 +107,14 @@ export function PageSection({ pageId, titleClickable }: { pageId: string; titleC
               let anchor = blockData.value[last.id];
 
               // Walk up to grid container
-              if (anchor?.parent && blockData.value[anchor.parent]?.layout === 'grid') {
+              if (anchor?.parent && blockData.value[anchor.parent]?.kind === 'grid') {
                 anchor = blockData.value[anchor.parent];
               }
 
               // Walk up to kanban heading (card → column heading → kanban heading)
               function isKanbanHeading(b: Block | undefined): boolean {
                 if (!b) return false;
-                const h = parseHeading(b.content);
-                return !!h.level && parseAnnotations(h.text).kanban;
+                return b.kind === 'heading' && parseAnnotations(b.text).kanban;
               }
               while (anchor?.parent) {
                 const parent = blockData.value[anchor.parent];
@@ -121,26 +129,20 @@ export function PageSection({ pageId, titleClickable }: { pageId: string; titleC
               if (!anchor) return;
 
               // If the anchor is empty and editable, just focus it
-              const isSpecial = anchor.layout === 'grid' || isKanbanHeading(anchor);
-              if (anchor.content.trim() === '' && !isSpecial) {
+              const isSpecial = anchor.kind === 'grid' || isKanbanHeading(anchor);
+              if (blockText(anchor).trim() === '' && !isSpecial) {
                 activateBlock(anchor.id, 'end');
                 return;
               }
 
-              // Create a sibling after the anchor. For kanban/grid special
-              // cases we sibling-match the anchor; otherwise a normal
-              // empty bullet via createBlockAfter.
+              // Create a sibling at the anchor's level. Kanban/grid anchors
+              // want the block appended past all existing siblings (match
+              // heading level so a kanban column becomes a proper sibling);
+              // anything else uses the normal after-anchor insertion.
               beginUndo('new block');
               if (isSpecial) {
-                const id = crypto.randomUUID();
-                const siblings = Object.values(blockData.value)
-                  .filter(b => b.pageId === pageId && b.parent === anchor!.parent);
-                const maxOrder = siblings.reduce((m, b) => Math.max(m, b.order), 0);
-                // Match the heading level so it becomes a proper sibling; if
-                // the anchor isn't a heading, start a plain bullet.
-                const { level } = parseHeading(anchor.content);
-                const content = level ? '#'.repeat(level) + ' ' : '- ';
-                saveBlock({ id, content, pageId, parent: anchor.parent, order: maxOrder + 1 });
+                const md = anchor.kind === 'heading' ? '#'.repeat(anchor.level) + ' ' : '- ';
+                const id = appendSiblingAt(pageId, anchor.parent, md);
                 commitUndo();
                 activateBlock(id, 'end');
               } else {
@@ -151,7 +153,7 @@ export function PageSection({ pageId, titleClickable }: { pageId: string; titleC
             }}
           />
         </div>
-        {backlinks.length > 0 && <BacklinksPanel backlinks={backlinks} />}
+        {backlinks.length > 0 && <BacklinksPanel backlinks={backlinks} defaultCollapsed={autoCollapse} />}
       </div>
     </div>
   );

@@ -5,9 +5,22 @@ import {
   blockData, saveBlock, deleteBlock, pageData,
   buildTree, flattenTree, getSiblings, nextOrder, orderBetween,
   blockKind, canAcceptChildren, isStructuralBlock, canBeSiblingAt,
+  markdownToBlock, blockHasText,
 } from './db';
-import { parseTodoStatus } from './parse';
+import { serializeBlock, parseTodoStatus } from './parse';
 import { beginUndo, commitUndo } from './undo';
+
+/** Read todo state from any block: bullet with `.todo`, or a paragraph
+ *  whose text happens to start with a todo prefix (`[ ] `, `TODO `, etc.).
+ *  Returns the status text bundle (status + syntax + post-marker text) or null. */
+function blockTodo(b: Block): { status: string; syntax: 'checkbox' | 'keyword'; text: string } | null {
+  if (b.kind === 'bullet' && b.todo) return { status: b.todo.status, syntax: b.todo.syntax, text: b.text };
+  if (b.kind === 'paragraph') {
+    const t = parseTodoStatus(b.text);
+    if (t.status && t.syntax) return { status: t.status, syntax: t.syntax, text: t.text };
+  }
+  return null;
+}
 
 // --- Descendant helpers ---
 
@@ -107,8 +120,19 @@ export function moveBlock(
 
 /** Default content for a newly created block: an empty bullet. Callers
  *  may pass any markdown (`# H`, bare prose, etc.) — the kind is derived
- *  from the prefix. */
+ *  by parsing the prefix. */
 const DEFAULT_NEW_CONTENT = '- ';
+
+/** Build a Block from an id, position, and a markdown content string.
+ *  Blocks with no real text are born `tentative: true` so the store
+ *  isn't written to for speculative empties (click-to-create, Enter's
+ *  empty continuation template, etc.); saveBlock auto-clears the flag
+ *  and emits once the block acquires content. */
+function buildBlock(id: string, pageId: string, parent: string | null, order: number, content: string): Block {
+  const overlay = markdownToBlock(content);
+  const base = { id, pageId, parent, order, ...overlay } as Block;
+  return blockHasText(base) ? base : { ...base, tentative: true };
+}
 
 /** Create a new block after `afterId`, returns the new block's ID.
  *  If the level contains headings and the new block is not a heading,
@@ -117,7 +141,7 @@ export function createBlockAfter(afterId: string, content: string = DEFAULT_NEW_
   const after = blockData.value[afterId];
   if (!after) return '';
 
-  const provisional = { content } as Block;
+  const provisional = buildBlock('', after.pageId, after.parent, 0, content);
   if (!canBeSiblingAt(provisional, after.pageId, after.parent) && canAcceptChildren(after)) {
     return createChildBlock(afterId, content);
   }
@@ -127,7 +151,7 @@ export function createBlockAfter(afterId: string, content: string = DEFAULT_NEW_
   const next = siblings[idx + 1];
   const order = orderBetween(after.order, next?.order);
   const id = crypto.randomUUID();
-  saveBlock({ id, content, pageId: after.pageId, parent: after.parent, order });
+  saveBlock(buildBlock(id, after.pageId, after.parent, order, content));
   return id;
 }
 
@@ -138,7 +162,18 @@ export function createChildBlock(parentId: string, content: string = DEFAULT_NEW
   const children = Object.values(blockData.value)
     .filter(b => b.pageId === parent.pageId && b.parent === parentId);
   const id = crypto.randomUUID();
-  saveBlock({ id, content, pageId: parent.pageId, parent: parentId, order: nextOrder(children) });
+  saveBlock(buildBlock(id, parent.pageId, parentId, nextOrder(children), content));
+  return id;
+}
+
+/** Append a new block at the end of the sibling list at `parent`. Used by
+ *  click-into-blank-area handlers that want to drop a new block past all
+ *  existing siblings instead of inserting next to a specific anchor. */
+export function appendSiblingAt(pageId: string, parent: string | null, content: string = DEFAULT_NEW_CONTENT): string {
+  const siblings = Object.values(blockData.value)
+    .filter(b => b.pageId === pageId && b.parent === parent);
+  const id = crypto.randomUUID();
+  saveBlock(buildBlock(id, pageId, parent, nextOrder(siblings), content));
   return id;
 }
 
@@ -181,22 +216,30 @@ export function outdentBlock(blockId: string) {
 
 /** Join a block onto the end of the previous block in the flat tree.
  * Returns { prevId, cursorPos } on success, or null if there is no previous block.
- * cursorPos is the offset in the merged content where the cursor should be placed. */
-export function joinBlockWithPrevious(blockId: string, currentContent: string): { prevId: string; cursorPos: number } | null {
+ * cursorPos is the offset in the merged content where the cursor should be placed.
+ *
+ * `currentMd` is the editor's textContent (full markdown) for the block being
+ * joined; we parse it to lift the post-prefix text into prev. */
+export function joinBlockWithPrevious(blockId: string, currentMd: string): { prevId: string; cursorPos: number } | null {
   const block = blockData.value[blockId];
   if (!block) return null;
   const tree = buildTree(block.pageId);
   const flat = flattenTree(tree);
   const idx = flat.findIndex(b => b.id === blockId);
   if (idx <= 0) return null;
-  const prev = flat[idx - 1];
-  const prevContent = prev.content;
-  // Strip the current block's own bullet prefix before appending so the join
-  // doesn't embed `- ` inside the merged bullet.
-  const tail = currentContent.startsWith('- ') ? currentContent.slice(2) : currentContent;
-  const joinedContent = prevContent + tail;
-  const cursorPos = prevContent.length;
-  saveBlock({ ...blockData.value[prev.id], content: joinedContent });
+  const prev = blockData.value[flat[idx - 1].id];
+  if (!prev) return null;
+
+  // Lift current's text portion (markdown prefix dropped by the parser).
+  const overlay = markdownToBlock(currentMd) as { kind: string; text?: string };
+  const tail = overlay.text ?? '';
+
+  // Cursor lands at the end of prev's existing markdown form.
+  const cursorPos = serializeBlock(prev).content.length;
+
+  if (prev.kind === 'bullet' || prev.kind === 'paragraph' || prev.kind === 'heading') {
+    saveBlock({ ...prev, text: prev.text + tail });
+  }
   deleteBlock(blockId);
   return { prevId: prev.id, cursorPos };
 }
@@ -226,19 +269,12 @@ export function removeBlock(blockId: string): string | null {
 
 // --- Carry forward ---
 
-/** Read todo status from a block's content, tolerating the bullet prefix
- *  that v2 bullets carry (`"- [ ] task"` → status `'todo'`). */
-function blockTodoStatus(content: string): { status: string | null; text: string; syntax: 'checkbox' | 'keyword' | null } {
-  const rest = content.startsWith('- ') ? content.slice(2) : content;
-  return parseTodoStatus(rest);
-}
-
 /** Check if a block or any of its descendants has an incomplete todo. */
 export function hasIncompleteTodos(blockId: string): boolean {
   const block = blockData.value[blockId];
   if (!block) return false;
-  const { status } = blockTodoStatus(block.content);
-  if (status && status !== 'done' && status !== 'cancelled') return true;
+  const t = blockTodo(block);
+  if (t && t.status !== 'done' && t.status !== 'cancelled') return true;
   return Object.values(blockData.value)
     .filter(b => b.parent === blockId)
     .some(b => hasIncompleteTodos(b.id));
@@ -263,21 +299,17 @@ function doCarryForward(
   const block = blockData.value[blockId];
   if (!block) return false;
 
-  const { status } = blockTodoStatus(block.content);
-  const isComplete = status === 'done' || status === 'cancelled';
-  if (isComplete) return false;
+  const blockTd = blockTodo(block);
+  if (blockTd && (blockTd.status === 'done' || blockTd.status === 'cancelled')) return false;
   if (!hasIncompleteTodos(blockId)) return false;
 
   function walkAndCopy(sourceId: string, targetParent: string | null, isRoot: boolean) {
     const src = blockData.value[sourceId];
     if (!src) return;
 
-    const { status: srcStatus, text: srcText } = blockTodoStatus(src.content);
-    const isComplete = srcStatus === 'done' || srcStatus === 'cancelled';
-    const isTodo = srcStatus !== null;
-    // For bullet blocks, preserve the `- ` prefix when rewriting source content.
-    const bulletPrefix = src.content.startsWith('- ') ? '- ' : '';
-
+    const srcTodo = blockTodo(src);
+    const isTodo = !!srcTodo;
+    const isComplete = isTodo && (srcTodo.status === 'done' || srcTodo.status === 'cancelled');
     if (isComplete) return;
 
     const newId = crypto.randomUUID();
@@ -286,22 +318,26 @@ function doCarryForward(
       .filter(b => b.pageId === src.pageId && b.parent === sourceId)
       .sort((a, b) => a.order - b.order);
 
-    if (targetParent === null) {
-      saveBlock({ id: newId, content: src.content, pageId: targetPageId, parent: null, order: targetOrder.value++, layout: src.layout });
-    } else {
-      saveBlock({ id: newId, content: src.content, pageId: targetPageId, parent: targetParent, order: src.order, layout: src.layout });
-    }
+    const copy: Block = targetParent === null
+      ? { ...src, id: newId, pageId: targetPageId, parent: null, order: targetOrder.value++ }
+      : { ...src, id: newId, pageId: targetPageId, parent: targetParent, order: src.order };
+    saveBlock(copy);
 
     // Recurse into children before modifying source (deleteBlock would remove descendants)
     for (const child of children) {
       walkAndCopy(child.id, newId, false);
     }
 
-    // Update source block
-    if (isTodo) {
-      saveBlock({ ...src, content: `${bulletPrefix}${linkText} ${srcText}` });
-    } else if (isRoot) {
-      saveBlock({ ...src, content: `${bulletPrefix}${linkText} ${src.content.slice(bulletPrefix.length)}` });
+    // Update source block: replace todo's open marker with a link, or
+    // (for non-todo roots) prepend the link to the existing text.
+    if (isTodo && src.kind === 'bullet') {
+      saveBlock({ ...src, todo: undefined, text: `${linkText} ${srcTodo!.text}` });
+    } else if (isTodo && src.kind === 'paragraph') {
+      // Paragraph that was acting as a todo (e.g. starts with `[ ] `) — replace
+      // the prefix with the link, keeping kind=paragraph.
+      saveBlock({ ...src, text: `${linkText} ${srcTodo!.text}` });
+    } else if (isRoot && (src.kind === 'bullet' || src.kind === 'paragraph' || src.kind === 'heading')) {
+      saveBlock({ ...src, text: `${linkText} ${src.text}` });
     } else {
       const remainingChildren = Object.values(blockData.value)
         .filter(b => b.parent === sourceId && b.pageId === src.pageId);

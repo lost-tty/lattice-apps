@@ -5,7 +5,7 @@ export type StoreOp =
   | { delete: { key: Uint8Array } };
 
 export interface Store {
-  List(p: { prefix: Uint8Array }): Promise<unknown>;
+  List(p: { prefix: Uint8Array }): Promise<{ items: { key: Uint8Array; value: Uint8Array }[] }>;
   Get(p: { key: Uint8Array }): Promise<{ value: Uint8Array | null }>;
   Put(p: { key: Uint8Array; value: Uint8Array }): Promise<void>;
   Delete(p: { key: Uint8Array }): Promise<void>;
@@ -27,29 +27,53 @@ export interface Page {
   id: string;
   title: string;
   slug: string;
-  folder?: string;   // e.g. 'journals' — undefined means root
   createdAt: string;
   updatedAt: string;
 }
 
-export interface Block {
-  id: string;
-  /** Full markdown syntax: "- foo" for bullets, "# H" for headings,
-   *  "- [ ] task" for todos, "---" for hrule, bare text for paragraphs.
-   *  Indentation is not part of content — it's derived from the tree. */
+/** On-disk shape: a flat record persisted to the kvstore. The block's
+ *  identity lives in the key (`block/<id>`); fields here mirror the
+ *  pre-union schema for backward storage compatibility. */
+export interface StoredBlock {
+  /** Full markdown syntax: "- foo", "# H", "- [ ] task", "---", or bare
+   *  text. Empty for grid containers. */
   content: string;
   pageId: string;
   parent: string | null;
   order: number;
-  /** Structural layout of the block's children. Currently only `'grid'`
-   *  (the container's children are table cells positioned by `col`). */
   layout?: 'grid';
-  col?: number;   // column position for grid cell blocks (fractional)
+  col?: number;
   collapsed?: boolean;
   createdAt?: string;
   updatedAt?: string;
 }
 
-export interface BlockNode extends Block {
-  children: BlockNode[];
+/** In-memory block: fields are parsed from `StoredBlock.content` once at
+ *  the db.ts boundary. Renderers and editors read `kind`/`text`/`level`/
+ *  `todo` directly — no prefix parsing scattered through the codebase. */
+export type TodoStatus = { status: string; syntax: 'checkbox' | 'keyword' };
+
+interface BlockBase {
+  id: string;
+  pageId: string;
+  parent: string | null;
+  order: number;
+  col?: number;
+  collapsed?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  /** Memory-only block that hasn't earned store persistence yet (empty
+   *  block created speculatively by the click handler, Enter continuation,
+   *  etc.). saveBlock auto-clears this flag and emits when the block
+   *  acquires real text; deleteBlock skips the store delete when set. */
+  tentative?: boolean;
 }
+
+export type Block =
+  | (BlockBase & { kind: 'bullet';    text: string; todo?: TodoStatus })
+  | (BlockBase & { kind: 'heading';   text: string; level: 1 | 2 | 3 | 4 | 5 | 6 })
+  | (BlockBase & { kind: 'paragraph'; text: string })
+  | (BlockBase & { kind: 'hrule' })
+  | (BlockBase & { kind: 'grid' });
+
+export type BlockNode = Block & { children: BlockNode[] };

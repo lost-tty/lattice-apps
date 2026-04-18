@@ -12,6 +12,7 @@ import {
   pageTitle, pageList, isTentativePage,
 } from '../src/db';
 import type { Block } from '../src/types';
+import { parseStoredBlock } from '../src/parse';
 
 /** Test-only compatibility wrapper over `saveBlock`.
  *
@@ -29,25 +30,28 @@ import type { Block } from '../src/types';
  *
  *  The wrapper is a bridge, not a preferred API. */
 function saveBlock(block: any) {
-  const { type, content = '', layout, col, ...rest } = block;
+  const { id, type, content = '', layout, col, ...rest } = block;
+  // Translate v1/v2 fixture shape into the on-disk StoredBlock shape, then
+  // run it through parseStoredBlock to produce the typed in-memory Block
+  // the real saveBlock now expects.
+  let storedContent = content;
+  let storedLayout = layout;
   if (type === 'table') {
-    return _rawSaveBlock({ ...rest, content, col, layout: 'grid' });
+    storedContent = '';
+    storedLayout = 'grid';
+  } else if (type === 'paragraph' || col !== undefined) {
+    // bare content, no bullet prefix
+  } else {
+    const alreadyMigrated =
+      content === '' ||
+      content === '- ' ||
+      content.startsWith('- ') ||
+      /^#{1,6} /.test(content) ||
+      content === '---';
+    storedContent = alreadyMigrated ? content : '- ' + content;
   }
-  if (type === 'paragraph') {
-    return _rawSaveBlock({ ...rest, content, col, layout });
-  }
-  // Grid cells (identified by `col`) keep bare content, no bullet prefix.
-  if (col !== undefined) {
-    return _rawSaveBlock({ ...rest, content, col, layout });
-  }
-  const alreadyMigrated =
-    content === '' ||
-    content === '- ' ||
-    content.startsWith('- ') ||
-    /^#{1,6} /.test(content) ||
-    content === '---';
-  const nextContent = alreadyMigrated ? content : '- ' + content;
-  return _rawSaveBlock({ ...rest, content: nextContent, col, layout });
+  const stored = { ...rest, content: storedContent, col, layout: storedLayout };
+  return _rawSaveBlock(parseStoredBlock(stored, id));
 }
 import { beginUndo, commitUndo, undo, redo } from '../src/undo';
 import {
@@ -156,14 +160,14 @@ describe('init and CRUD', () => {
     expect(pageData.value['pg1']).toBeDefined();
     expect(pageData.value['pg1'].title).toBe('test');
     expect(blockData.value['abc']).toBeDefined();
-    expect(blockData.value['abc'].content).toBe('- hello');
+    expect(blockData.value['abc']).toMatchObject({ kind: 'bullet', text: 'hello' });
     expect(blockData.value['abc'].pageId).toBe('pg1');
   });
 
   it('saveBlock updates signal and store', () => {
     const pageId = getOrCreatePage('p');
     saveBlock({ id: '1', content: 'hi', pageId, parent: null, order: 0 });
-    expect(blockData.value['1'].content).toBe('- hi');
+    expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'hi' });
   });
 
   it('saveBlock auto-sets createdAt on new blocks', () => {
@@ -279,7 +283,7 @@ describe('createBlockAfter', () => {
 
     const newId = createBlockAfter('1', '- between');
     const block = blockData.value[newId];
-    expect(block.content).toBe('- between');
+    expect(block).toMatchObject({ kind: 'bullet', text: 'between' });
     expect(block.order).toBeGreaterThan(0);
     expect(block.order).toBeLessThan(1);
     expect(block.parent).toBeNull();
@@ -315,12 +319,15 @@ describe('createBlockAfter', () => {
     const newId = createBlockAfter('1', after);
     activeBlockId.value = newId;
 
-    expect(blockData.value['1'].content).toBe('- hello');
-    expect(blockData.value[newId].content).toBe('-  world');
+    expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'hello' });
+    expect(blockData.value[newId]).toMatchObject({ kind: 'bullet', text: ' world' });
     expect(activeBlockId.value).toBe(newId);
 
     const flat = flattenTree(buildTree(pageId));
-    expect(flat.map(b => b.content)).toEqual(['- hello', '-  world']);
+    expect(flat.map(b => ({ kind: b.kind, text: b.text }))).toEqual([
+      { kind: 'bullet', text: 'hello' },
+      { kind: 'bullet', text: ' world' },
+    ]);
   });
 });
 
@@ -333,7 +340,7 @@ describe('createChildBlock', () => {
     const newId = createChildBlock('1', '- new child');
     const block = blockData.value[newId];
     expect(block.parent).toBe('1');
-    expect(block.content).toBe('- new child');
+    expect(block).toMatchObject({ kind: 'bullet', text: 'new child' });
     expect(block.order).toBeGreaterThan(blockData.value['2'].order);
   });
 
@@ -482,7 +489,7 @@ describe('joinBlockWithPrevious', () => {
     const result = joinBlockWithPrevious('2', 'world');
     expect(result).not.toBeNull();
     expect(result!.prevId).toBe('1');
-    expect(blockData.value['1'].content).toBe('- helloworld');
+    expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'helloworld' });
     expect(blockData.value['2']).toBeUndefined();
     expect(result!.cursorPos).toBe(7);
   });
@@ -495,7 +502,7 @@ describe('joinBlockWithPrevious', () => {
     const result = joinBlockWithPrevious('2', 'world');
     expect(result).not.toBeNull();
     expect(result!.prevId).toBe('1');
-    expect(blockData.value['1'].content).toBe('- hello world');
+    expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'hello world' });
     expect(blockData.value['2']).toBeUndefined();
     expect(result!.cursorPos).toBe(8);
   });
@@ -506,7 +513,7 @@ describe('joinBlockWithPrevious', () => {
 
     const result = joinBlockWithPrevious('1', 'only block');
     expect(result).toBeNull();
-    expect(blockData.value['1'].content).toBe('- only block');
+    expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'only block' });
   });
 
   it('works across nesting levels (previous in flat tree order)', () => {
@@ -517,7 +524,7 @@ describe('joinBlockWithPrevious', () => {
 
     const result = joinBlockWithPrevious('3', 'next');
     expect(result!.prevId).toBe('2');
-    expect(blockData.value['2'].content).toBe('- childnext');
+    expect(blockData.value['2']).toMatchObject({ kind: 'bullet', text: 'childnext' });
     expect(blockData.value['3']).toBeUndefined();
   });
 
@@ -529,7 +536,7 @@ describe('joinBlockWithPrevious', () => {
     const result = joinBlockWithPrevious('2', '');
     expect(result).not.toBeNull();
     expect(result!.prevId).toBe('1');
-    expect(blockData.value['1'].content).toBe('- hello');
+    expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'hello' });
     expect(blockData.value['2']).toBeUndefined();
     expect(result!.cursorPos).toBe(7);
   });
@@ -682,9 +689,9 @@ describe('parseMarkdownToItems', () => {
     const flat = flattenTree(buildTree(pageId));
     // Continuation lines join with their bullet block (content now carries
     // the `- ` prefix as part of v2).
-    expect(flat.map(b => ({ content: b.content, depth: b.depth }))).toEqual([
-      { content: '- parent\ncontinuation\nmore', depth: 0 },
-      { content: '- child\nchild cont',          depth: 1 },
+    expect(flat.map(b => ({ kind: b.kind, text: b.text, depth: b.depth }))).toEqual([
+      { kind: 'bullet', text: 'parent\ncontinuation\nmore', depth: 0 },
+      { kind: 'bullet', text: 'child\nchild cont',          depth: 1 },
     ]);
     // Re-export should produce valid CommonMark with indented continuations
     const md = exportPage(pageId);
@@ -704,7 +711,12 @@ describe('insertBlocksAfter', () => {
     ]);
 
     const flat = flattenTree(buildTree(pageId));
-    expect(flat.map(b => b.content)).toEqual(['- a', '- b', '- c', '- z']);
+    expect(flat.map(b => ({ kind: b.kind, text: b.text }))).toEqual([
+      { kind: 'bullet', text: 'a' },
+      { kind: 'bullet', text: 'b' },
+      { kind: 'bullet', text: 'c' },
+      { kind: 'bullet', text: 'z' },
+    ]);
   });
 
   it('inserts nested items at the correct depth', () => {
@@ -719,12 +731,12 @@ describe('insertBlocksAfter', () => {
     ]);
 
     const flat = flattenTree(buildTree(pageId));
-    expect(flat.map(b => ({ content: b.content, depth: b.depth }))).toEqual([
-      { content: '- root',       depth: 0 },
-      { content: '- sibling',    depth: 0 },
-      { content: '- child',      depth: 1 },
-      { content: '- grandchild', depth: 2 },
-      { content: '- next',       depth: 0 },
+    expect(flat.map(b => ({ kind: b.kind, text: b.text, depth: b.depth }))).toEqual([
+      { kind: 'bullet', text: 'root',       depth: 0 },
+      { kind: 'bullet', text: 'sibling',    depth: 0 },
+      { kind: 'bullet', text: 'child',      depth: 1 },
+      { kind: 'bullet', text: 'grandchild', depth: 2 },
+      { kind: 'bullet', text: 'next',       depth: 0 },
     ]);
   });
 
@@ -737,7 +749,7 @@ describe('insertBlocksAfter', () => {
       { content: 'c', relativeDepth: 0 },
     ]);
 
-    expect(blockData.value[lastId].content).toBe('- c');
+    expect(blockData.value[lastId]).toMatchObject({ kind: 'bullet', text: 'c' });
   });
 
   it('inserts between existing siblings, not after them', () => {
@@ -749,7 +761,12 @@ describe('insertBlocksAfter', () => {
     insertBlocksAfter('2', [{ content: 'inserted', relativeDepth: 0 }]);
 
     const flat = flattenTree(buildTree(pageId));
-    expect(flat.map(b => b.content)).toEqual(['- a', '- b', '- inserted', '- z']);
+    expect(flat.map(b => ({ kind: b.kind, text: b.text }))).toEqual([
+      { kind: 'bullet', text: 'a' },
+      { kind: 'bullet', text: 'b' },
+      { kind: 'bullet', text: 'inserted' },
+      { kind: 'bullet', text: 'z' },
+    ]);
   });
 
   it('depth-0 items land after the anchor\'s existing children in flat order', () => {
@@ -761,7 +778,12 @@ describe('insertBlocksAfter', () => {
     insertBlocksAfter('1', [{ content: 'inserted', relativeDepth: 0 }]);
 
     const flat = flattenTree(buildTree(pageId));
-    expect(flat.map(b => b.content)).toEqual(['- anchor', '- child', '- inserted', '- next']);
+    expect(flat.map(b => ({ kind: b.kind, text: b.text }))).toEqual([
+      { kind: 'bullet', text: 'anchor' },
+      { kind: 'bullet', text: 'child' },
+      { kind: 'bullet', text: 'inserted' },
+      { kind: 'bullet', text: 'next' },
+    ]);
   });
 });
 
@@ -911,11 +933,11 @@ describe('importPage', () => {
     importPage(pageId, '- root\n  - child\n    - grandchild\n- sibling');
     const flat = flattenTree(buildTree(pageId));
     // v2: bullet content carries the `- ` prefix.
-    expect(flat.map(b => ({ content: b.content, depth: b.depth }))).toEqual([
-      { content: '- root',       depth: 0 },
-      { content: '- child',      depth: 1 },
-      { content: '- grandchild', depth: 2 },
-      { content: '- sibling',    depth: 0 },
+    expect(flat.map(b => ({ kind: b.kind, text: b.text, depth: b.depth }))).toEqual([
+      { kind: 'bullet', text: 'root',       depth: 0 },
+      { kind: 'bullet', text: 'child',      depth: 1 },
+      { kind: 'bullet', text: 'grandchild', depth: 2 },
+      { kind: 'bullet', text: 'sibling',    depth: 0 },
     ]);
   });
 
@@ -925,7 +947,7 @@ describe('importPage', () => {
     importPage(pageId, '- fresh');
     const flat = flattenTree(buildTree(pageId));
     expect(flat).toHaveLength(1);
-    expect(flat[0].content).toBe('- fresh');
+    expect(flat[0]).toMatchObject({ kind: 'bullet', text: 'fresh' });
   });
 
   it('rebuilds the complex page with correct structure', () => {
@@ -933,13 +955,13 @@ describe('importPage', () => {
     importPage(pageId, COMPLEX_PAGE_MD);
     const flat = flattenTree(buildTree(pageId));
     // Heading at depth 0, its bullets at depth 1, nested bullets deeper
-    expect(flat[0]).toMatchObject({ content: '# Project Overview', depth: 0 });
-    expect(flat[1]).toMatchObject({ content: '- **Goals** for this quarter: ship [[Outliner]] v1', depth: 1 });
-    expect(flat[2]).toMatchObject({ content: '- TODO Write feature specs', depth: 2 });
-    expect(flat[4]).toMatchObject({ content: '- ~~old approach~~ replaced with ==highlights==', depth: 3 });
-    expect(flat[8]).toMatchObject({ content: '---', depth: 0 });
-    expect(flat[9]).toMatchObject({ content: '## Meeting Notes', depth: 1 });
-    expect(flat[16]).toMatchObject({ content: '# Resources', depth: 0 });
+    expect(flat[0]).toMatchObject({ kind: 'heading', text: 'Project Overview', level: 1, depth: 0 });
+    expect(flat[1]).toMatchObject({ kind: 'bullet', text: '**Goals** for this quarter: ship [[Outliner]] v1', depth: 1 });
+    expect(flat[2]).toMatchObject({ kind: 'bullet', text: 'Write feature specs', depth: 2 });
+    expect(flat[4]).toMatchObject({ kind: 'bullet', text: '~~old approach~~ replaced with ==highlights==', depth: 3 });
+    expect(flat[8]).toMatchObject({ kind: 'hrule', depth: 0 });
+    expect(flat[9]).toMatchObject({ kind: 'heading', text: 'Meeting Notes', level: 2, depth: 1 });
+    expect(flat[16]).toMatchObject({ kind: 'heading', text: 'Resources', level: 1, depth: 0 });
     expect(flat).toHaveLength(19);
   });
 });
@@ -961,7 +983,7 @@ describe('roundtrip: export → import → export', () => {
 });
 
 describe('exportAllPages', () => {
-  it('returns an entry per page with correct folder and slug-based filename', () => {
+  it('returns an entry per page with slug-based filename', () => {
     const id1 = getOrCreatePage('My Notes');
     saveBlock({ id: 'b1', content: 'hello', pageId: id1, parent: null, order: 0 });
     const id2 = getOrCreatePage('2026-03-27');
@@ -969,10 +991,10 @@ describe('exportAllPages', () => {
 
     const entries = exportAllPages();
     const paths = entries.map(e => e.path);
-    expect(paths).toContain('pages/my-notes.md');
-    expect(paths).toContain('journals/2026-03-27.md');
+    expect(paths).toContain('my-notes.md');
+    expect(paths).toContain('2026-03-27.md');
 
-    const notes = entries.find(e => e.path === 'pages/my-notes.md')!;
+    const notes = entries.find(e => e.path === 'my-notes.md')!;
     expect(notes.content).toBe('- hello');
   });
 });
@@ -1002,14 +1024,19 @@ describe('importAllPages', () => {
     const notesPage = Object.values(pageData.value).find(p => p.title === 'notes');
     expect(notesPage).toBeDefined();
     const notesFlat = flattenTree(buildTree(notesPage!.id));
-    expect(notesFlat.map(b => b.content)).toEqual(['- alpha', '- beta']);
+    expect(notesFlat.map(b => ({ kind: b.kind, text: b.text }))).toEqual([
+      { kind: 'bullet', text: 'alpha' },
+      { kind: 'bullet', text: 'beta' },
+    ]);
 
     // Journal page
     const journalPage = Object.values(pageData.value).find(p => p.title === '2026-03-27');
     expect(journalPage).toBeDefined();
-    expect(journalPage!.folder).toBe('journals');
+    expect(isJournalSlug(journalPage!.title)).toBe(true);
     const journalFlat = flattenTree(buildTree(journalPage!.id));
-    expect(journalFlat.map(b => b.content)).toEqual(['- today']);
+    expect(journalFlat.map(b => ({ kind: b.kind, text: b.text }))).toEqual([
+      { kind: 'bullet', text: 'today' },
+    ]);
   });
 
   it('full roundtrip: exportAllPages → buildTar → parseTar → importAllPages', async () => {
@@ -1033,7 +1060,10 @@ describe('importAllPages', () => {
     const page = Object.values(pageData.value).find(p => p.title === 'roundtrip-test');
     expect(page).toBeDefined();
     const flat = flattenTree(buildTree(page!.id));
-    expect(flat.map(b => b.content)).toEqual(['# Title', '- bullet']);
+    expect(flat.map(b => ({ kind: b.kind, text: b.text }))).toEqual([
+      { kind: 'heading', text: 'Title' },
+      { kind: 'bullet', text: 'bullet' },
+    ]);
     expect(flat[1].depth).toBe(1);
   });
 });
@@ -1138,13 +1168,13 @@ describe('table data model', () => {
       ['Bob', '25'],
     ]);
 
-    expect(blockData.value[tableId].layout).toBe('grid');
+    expect(blockData.value[tableId].kind).toBe('grid');
     const grid = getTableGrid(tableId);
     expect(grid.length).toBe(3);
     expect(grid[0].cells.length).toBe(2);
-    expect(grid[0].cells[0].content).toBe('Name');
-    expect(grid[0].cells[1].content).toBe('Age');
-    expect(grid[2].cells[0].content).toBe('Bob');
+    expect(grid[0].cells[0].text).toBe('Name');
+    expect(grid[0].cells[1].text).toBe('Age');
+    expect(grid[2].cells[0].text).toBe('Bob');
   });
 
   it('getTableGrid returns rows sorted by order and cells sorted by col', () => {
@@ -1158,7 +1188,7 @@ describe('table data model', () => {
     saveBlock({ id: 'c12', content: 'B', pageId, parent: tableId, order: 0, col: 1 });
 
     const grid = getTableGrid(tableId);
-    expect(grid.map(r => r.cells.map(c => c.content))).toEqual([
+    expect(grid.map(r => r.cells.map(c => c.text))).toEqual([
       ['A', 'B'],
       ['C', 'D'],
     ]);
@@ -1173,7 +1203,7 @@ describe('table data model', () => {
     expect(newCells.length).toBe(3);
     const grid = getTableGrid(tableId);
     expect(grid.length).toBe(2);
-    expect(grid[1].cells.every(c => c.content === '')).toBe(true);
+    expect(grid[1].cells.every(c => c.text === '')).toBe(true);
   });
 
   it('insertTableRow inserts between existing rows', () => {
@@ -1185,9 +1215,9 @@ describe('table data model', () => {
     insertTableRow(tableId, grid[0].order);
     const updated = getTableGrid(tableId);
     expect(updated.length).toBe(3);
-    expect(updated[0].cells[0].content).toBe('A');
-    expect(updated[1].cells[0].content).toBe('');
-    expect(updated[2].cells[0].content).toBe('C');
+    expect(updated[0].cells[0].text).toBe('A');
+    expect(updated[1].cells[0].text).toBe('');
+    expect(updated[2].cells[0].text).toBe('C');
   });
 
   it('insertTableCol appends a column to every row', () => {
@@ -1199,7 +1229,7 @@ describe('table data model', () => {
     const grid = getTableGrid(tableId);
     expect(grid[0].cells.length).toBe(3);
     expect(grid[1].cells.length).toBe(3);
-    expect(grid[0].cells[2].content).toBe('');
+    expect(grid[0].cells[2].text).toBe('');
   });
 
   it('insertTableCol inserts between existing columns', () => {
@@ -1210,8 +1240,8 @@ describe('table data model', () => {
     const grid = getTableGrid(tableId);
     insertTableCol(tableId, grid[0].cells[0].col);
     const updated = getTableGrid(tableId);
-    expect(updated[0].cells.map(c => c.content)).toEqual(['A', '', 'C']);
-    expect(updated[1].cells.map(c => c.content)).toEqual(['D', '', 'F']);
+    expect(updated[0].cells.map(c => c.text)).toEqual(['A', '', 'C']);
+    expect(updated[1].cells.map(c => c.text)).toEqual(['D', '', 'F']);
   });
   it('reorderTableRow moves a row before another', () => {
     const pageId = getOrCreatePage('p');
@@ -1222,7 +1252,7 @@ describe('table data model', () => {
     // Move row C before row A
     reorderTableRow(tableId, grid[2].order, grid[0].order, 'before');
     const updated = getTableGrid(tableId);
-    expect(updated.map(r => r.cells[0].content)).toEqual(['C', 'A', 'B']);
+    expect(updated.map(r => r.cells[0].text)).toEqual(['C', 'A', 'B']);
   });
 
   it('reorderTableRow moves a row after another', () => {
@@ -1234,7 +1264,7 @@ describe('table data model', () => {
     // Move row A after row C
     reorderTableRow(tableId, grid[0].order, grid[2].order, 'after');
     const updated = getTableGrid(tableId);
-    expect(updated.map(r => r.cells[0].content)).toEqual(['B', 'C', 'A']);
+    expect(updated.map(r => r.cells[0].text)).toEqual(['B', 'C', 'A']);
   });
 
   it('reorderTableCol moves a column before another', () => {
@@ -1248,8 +1278,8 @@ describe('table data model', () => {
     // Move col C before col A
     reorderTableCol(tableId, colC, colA, 'before');
     const updated = getTableGrid(tableId);
-    expect(updated[0].cells.map(c => c.content)).toEqual(['C', 'A', 'B']);
-    expect(updated[1].cells.map(c => c.content)).toEqual(['F', 'D', 'E']);
+    expect(updated[0].cells.map(c => c.text)).toEqual(['C', 'A', 'B']);
+    expect(updated[1].cells.map(c => c.text)).toEqual(['F', 'D', 'E']);
   });
 
   it('reorderTableCol moves a column after another', () => {
@@ -1263,8 +1293,8 @@ describe('table data model', () => {
     // Move col A after col C
     reorderTableCol(tableId, colA, colC, 'after');
     const updated = getTableGrid(tableId);
-    expect(updated[0].cells.map(c => c.content)).toEqual(['B', 'C', 'A']);
-    expect(updated[1].cells.map(c => c.content)).toEqual(['E', 'F', 'D']);
+    expect(updated[0].cells.map(c => c.text)).toEqual(['B', 'C', 'A']);
+    expect(updated[1].cells.map(c => c.text)).toEqual(['E', 'F', 'D']);
   });
 
   it('deleteTableRow removes all cells in a row', () => {
@@ -1276,8 +1306,8 @@ describe('table data model', () => {
     deleteTableRow(tableId, grid[1].order);
     const updated = getTableGrid(tableId);
     expect(updated.length).toBe(2);
-    expect(updated[0].cells.map(c => c.content)).toEqual(['A', 'B']);
-    expect(updated[1].cells.map(c => c.content)).toEqual(['E', 'F']);
+    expect(updated[0].cells.map(c => c.text)).toEqual(['A', 'B']);
+    expect(updated[1].cells.map(c => c.text)).toEqual(['E', 'F']);
   });
 
   it('deleteTableCol removes all cells in a column', () => {
@@ -1289,8 +1319,8 @@ describe('table data model', () => {
     const colB = grid[0].cells[1].col!;
     deleteTableCol(tableId, colB);
     const updated = getTableGrid(tableId);
-    expect(updated[0].cells.map(c => c.content)).toEqual(['A', 'C']);
-    expect(updated[1].cells.map(c => c.content)).toEqual(['D', 'F']);
+    expect(updated[0].cells.map(c => c.text)).toEqual(['A', 'C']);
+    expect(updated[1].cells.map(c => c.text)).toEqual(['D', 'F']);
   });
 
   it('deleting the last row removes the table block itself', () => {
@@ -1316,12 +1346,12 @@ describe('table import/export', () => {
     const pageId = getOrCreatePage('table-import');
     importPage(pageId, '| H1 | H2 |\n|---|---|\n| a | b |');
     const flat = flattenTree(buildTree(pageId));
-    const table = flat.find(b => b.layout === 'grid');
+    const table = flat.find(b => b.kind === 'grid');
     expect(table).toBeDefined();
     const grid = getTableGrid(table!.id);
     expect(grid.length).toBe(2);
-    expect(grid[0].cells.map(c => c.content)).toEqual(['H1', 'H2']);
-    expect(grid[1].cells.map(c => c.content)).toEqual(['a', 'b']);
+    expect(grid[0].cells.map(c => c.text)).toEqual(['H1', 'H2']);
+    expect(grid[1].cells.map(c => c.text)).toEqual(['a', 'b']);
   });
 
   it('exportPage serialises table blocks as Markdown tables', () => {
@@ -1539,7 +1569,7 @@ describe('navigateTo', () => {
     expect(page.title).toBe('new-page');
     const blocks = Object.values(blockData.value).filter(b => b.pageId === pageId);
     expect(blocks.length).toBe(1);
-    expect(blocks[0].content).toBe('');
+    expect(blocks[0]).toMatchObject({ kind: 'paragraph', text: '' });
     expect(activeBlockId.value).toBe(blocks[0].id);
   });
 
@@ -1669,16 +1699,16 @@ describe('pageList', () => {
     expect(pages[2].title).toBe('Notes');
   });
 
-  it('puts journal pages in the journals folder', () => {
+  it('journal pages are identified by title pattern', () => {
     navigateTo('2026-03-27');
     const page = pageList.value.find(p => p.title === '2026-03-27')!;
-    expect(page.folder).toBe('journals');
+    expect(isJournalSlug(page.title)).toBe(true);
   });
 
-  it('leaves regular pages with no folder', () => {
+  it('regular pages are not journals', () => {
     getOrCreatePage('My Notes');
     const page = pageList.value.find(p => p.title === 'My Notes')!;
-    expect(page.folder).toBeUndefined();
+    expect(isJournalSlug(page.title)).toBe(false);
   });
 });
 
@@ -1904,7 +1934,7 @@ describe('moveBlock', () => {
     // Cells should stay parented to the table
     const grid = getTableGrid(tableId);
     expect(grid.length).toBe(2);
-    expect(grid[0].cells[0].content).toBe('A');
+    expect(grid[0].cells[0].text).toBe('A');
   });
 
   it('moves a table block nested under another block', () => {
@@ -1918,7 +1948,7 @@ describe('moveBlock', () => {
     expect(blockData.value[tableId].parent).toBe('1');
     const grid = getTableGrid(tableId);
     expect(grid.length).toBe(1);
-    expect(grid[0].cells[0].content).toBe('X');
+    expect(grid[0].cells[0].text).toBe('X');
   });
 
   it('moves a bullet after a table block', () => {
@@ -2082,9 +2112,9 @@ describe('undo / redo', () => {
     saveBlock({ id: '1', content: 'original', pageId, parent: null, order: 0 });
     saveBlock({ ...blockData.value['1'], content: 'edited' });
 
-    expect(blockData.value['1'].content).toBe('- edited');
+    expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'edited' });
     undo();
-    expect(blockData.value['1'].content).toBe('- original');
+    expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'original' });
   });
 
   it('redoes after undo', () => {
@@ -2093,9 +2123,9 @@ describe('undo / redo', () => {
     saveBlock({ ...blockData.value['1'], content: 'edited' });
 
     undo();
-    expect(blockData.value['1'].content).toBe('- original');
+    expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'original' });
     redo();
-    expect(blockData.value['1'].content).toBe('- edited');
+    expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'edited' });
   });
 
   it('undoes a grouped operation', () => {
@@ -2108,11 +2138,11 @@ describe('undo / redo', () => {
     saveBlock({ id: '2', content: '- world', pageId, parent: null, order: 1 });
     commitUndo();
 
-    expect(blockData.value['1'].content).toBe('- hello');
+    expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'hello' });
     expect(blockData.value['2']).toBeDefined();
 
     undo();
-    expect(blockData.value['1'].content).toBe('- hello world');
+    expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'hello world' });
     expect(blockData.value['2']).toBeUndefined();
   });
 
@@ -2131,8 +2161,8 @@ describe('undo / redo', () => {
     undo();
     expect(blockData.value['1']).toBeDefined();
     expect(blockData.value['2']).toBeDefined();
-    expect(blockData.value['1'].content).toBe('- parent');
-    expect(blockData.value['2'].content).toBe('- child');
+    expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'parent' });
+    expect(blockData.value['2']).toMatchObject({ kind: 'bullet', text: 'child' });
     expect(blockData.value['2'].parent).toBe('1');
   });
 
@@ -2157,12 +2187,12 @@ describe('undo / redo', () => {
     saveBlock({ ...blockData.value['1'], content: 'b' });
 
     undo();
-    expect(blockData.value['1'].content).toBe('- a');
+    expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'a' });
 
     // New edit should clear redo
     saveBlock({ ...blockData.value['1'], content: 'c' });
     redo(); // should do nothing
-    expect(blockData.value['1'].content).toBe('- c');
+    expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'c' });
   });
 
   it('undoes moveBlock', () => {
@@ -2365,11 +2395,12 @@ describe('carryForward', () => {
     carryForward('s1', targetId);
 
     // Source block gets link, no longer a todo
-    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] Fix bug');
+    expect(blockData.value['s1']).toMatchObject({ kind: 'bullet', text: '[[2026-04-08]] Fix bug' });
     // New block created on target page with the todo content
     const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(1);
-    expect(targetBlocks[0].content).toBe('- [ ] Fix bug');
+    expect(targetBlocks[0]).toMatchObject({ kind: 'bullet', text: 'Fix bug' });
+    expect(targetBlocks[0].todo).toMatchObject({ status: 'todo', syntax: 'checkbox' });
   });
 
   it('carries forward a keyword todo (TODO, DOING)', () => {
@@ -2377,10 +2408,11 @@ describe('carryForward', () => {
 
     carryForward('s1', targetId);
 
-    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] Write tests');
+    expect(blockData.value['s1']).toMatchObject({ kind: 'bullet', text: '[[2026-04-08]] Write tests' });
     const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(1);
-    expect(targetBlocks[0].content).toBe('- TODO Write tests');
+    expect(targetBlocks[0]).toMatchObject({ kind: 'bullet', text: 'Write tests' });
+    expect(targetBlocks[0].todo).toMatchObject({ status: 'todo', syntax: 'keyword' });
   });
 
   it('skips complete children, carries incomplete children', () => {
@@ -2391,17 +2423,20 @@ describe('carryForward', () => {
     carryForward('s1', targetId);
 
     // Source: root and incomplete child get links, complete child untouched
-    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] Project X');
-    expect(blockData.value['s2'].content).toBe('- [x] Research');
-    expect(blockData.value['s3'].content).toBe('- [[2026-04-08]] Prototype');
+    expect(blockData.value['s1']).toMatchObject({ kind: 'bullet', text: '[[2026-04-08]] Project X' });
+    expect(blockData.value['s2']).toMatchObject({ kind: 'bullet', text: 'Research' });
+    expect(blockData.value['s2'].todo).toMatchObject({ status: 'done', syntax: 'checkbox' });
+    expect(blockData.value['s3']).toMatchObject({ kind: 'bullet', text: '[[2026-04-08]] Prototype' });
 
     // Target: root + incomplete child, no complete child
     const targetBlocks = Object.values(blockData.value)
       .filter(b => b.pageId === targetId)
       .sort((a, b) => a.order - b.order);
     expect(targetBlocks).toHaveLength(2);
-    expect(targetBlocks[0].content).toBe('- [ ] Project X');
-    expect(targetBlocks[1].content).toBe('- [ ] Prototype');
+    expect(targetBlocks[0]).toMatchObject({ kind: 'bullet', text: 'Project X' });
+    expect(targetBlocks[0].todo).toMatchObject({ status: 'todo', syntax: 'checkbox' });
+    expect(targetBlocks[1]).toMatchObject({ kind: 'bullet', text: 'Prototype' });
+    expect(targetBlocks[1].todo).toMatchObject({ status: 'todo', syntax: 'checkbox' });
     expect(targetBlocks[1].parent).toBe(targetBlocks[0].id);
   });
 
@@ -2413,8 +2448,10 @@ describe('carryForward', () => {
     carryForward('s1', targetId);
 
     // Source unchanged
-    expect(blockData.value['s1'].content).toBe('- [x] Done task');
-    expect(blockData.value['s2'].content).toBe('- [ ] Leftover subtask');
+    expect(blockData.value['s1']).toMatchObject({ kind: 'bullet', text: 'Done task' });
+    expect(blockData.value['s1'].todo).toMatchObject({ status: 'done', syntax: 'checkbox' });
+    expect(blockData.value['s2']).toMatchObject({ kind: 'bullet', text: 'Leftover subtask' });
+    expect(blockData.value['s2'].todo).toMatchObject({ status: 'todo', syntax: 'checkbox' });
     // Nothing on target
     const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(0);
@@ -2428,18 +2465,20 @@ describe('carryForward', () => {
     carryForward('s1', targetId);
 
     // Source: todos get links, non-todo child is deleted (moved)
-    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] Fix bug');
+    expect(blockData.value['s1']).toMatchObject({ kind: 'bullet', text: '[[2026-04-08]] Fix bug' });
     expect(blockData.value['s2']).toBeUndefined(); // moved to target
-    expect(blockData.value['s3'].content).toBe('- [[2026-04-08]] Write fix');
+    expect(blockData.value['s3']).toMatchObject({ kind: 'bullet', text: '[[2026-04-08]] Write fix' });
 
     // Target: root + context + incomplete child
     const targetBlocks = Object.values(blockData.value)
       .filter(b => b.pageId === targetId)
       .sort((a, b) => a.order - b.order);
     expect(targetBlocks).toHaveLength(3);
-    expect(targetBlocks[0].content).toBe('- [ ] Fix bug');
-    expect(targetBlocks[1].content).toBe('- Repro steps: open settings');
-    expect(targetBlocks[2].content).toBe('- [ ] Write fix');
+    expect(targetBlocks[0]).toMatchObject({ kind: 'bullet', text: 'Fix bug' });
+    expect(targetBlocks[0].todo).toMatchObject({ status: 'todo', syntax: 'checkbox' });
+    expect(targetBlocks[1]).toMatchObject({ kind: 'bullet', text: 'Repro steps: open settings' });
+    expect(targetBlocks[2]).toMatchObject({ kind: 'bullet', text: 'Write fix' });
+    expect(targetBlocks[2].todo).toMatchObject({ status: 'todo', syntax: 'checkbox' });
     // All children of the root
     expect(targetBlocks[1].parent).toBe(targetBlocks[0].id);
     expect(targetBlocks[2].parent).toBe(targetBlocks[0].id);
@@ -2457,12 +2496,12 @@ describe('carryForward', () => {
     const targetBlocks = Object.values(blockData.value)
       .filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(3);
-    const names = targetBlocks.map(b => b.content).sort();
-    expect(names).toContain('- [ ] Project');
-    expect(names).toContain('- [ ] Phase 1');
-    expect(names).toContain('- [ ] Implement');
+    const names = targetBlocks.map(b => b.text).sort();
+    expect(names).toContain('Project');
+    expect(names).toContain('Phase 1');
+    expect(names).toContain('Implement');
     // Mockup should NOT be on target
-    expect(names).not.toContain('[x] Mockup');
+    expect(names).not.toContain('Mockup');
   });
 
   it('preserves nesting structure on target page', () => {
@@ -2476,9 +2515,9 @@ describe('carryForward', () => {
       .filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(3);
 
-    const root = targetBlocks.find(b => b.content === '- [ ] Root')!;
-    const child = targetBlocks.find(b => b.content === '- [ ] Child')!;
-    const grandchild = targetBlocks.find(b => b.content === '- [ ] Grandchild')!;
+    const root = targetBlocks.find(b => b.text === 'Root')!;
+    const child = targetBlocks.find(b => b.text === 'Child')!;
+    const grandchild = targetBlocks.find(b => b.text === 'Grandchild')!;
 
     expect(root.parent).toBeNull();
     expect(child.parent).toBe(root.id);
@@ -2493,7 +2532,7 @@ describe('carryForward', () => {
     // Should be a no-op — block is not a todo
     const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(0);
-    expect(blockData.value['s1'].content).toBe('- [[2026-04-07]] Fix bug');
+    expect(blockData.value['s1']).toMatchObject({ kind: 'bullet', text: '[[2026-04-07]] Fix bug' });
   });
 
   it('carries forward into a page that already has blocks', () => {
@@ -2506,9 +2545,11 @@ describe('carryForward', () => {
       .filter(b => b.pageId === targetId)
       .sort((a, b) => a.order - b.order);
     expect(targetBlocks).toHaveLength(2);
-    expect(targetBlocks[0].content).toBe('- [ ] Existing task');
+    expect(targetBlocks[0]).toMatchObject({ kind: 'bullet', text: 'Existing task' });
+    expect(targetBlocks[0].todo).toMatchObject({ status: 'todo', syntax: 'checkbox' });
     // New task should be after existing
-    expect(targetBlocks[1].content).toBe('- [ ] New task');
+    expect(targetBlocks[1]).toMatchObject({ kind: 'bullet', text: 'New task' });
+    expect(targetBlocks[1].todo).toMatchObject({ status: 'todo', syntax: 'checkbox' });
   });
 
   it('whole operation is one undo group', () => {
@@ -2525,8 +2566,10 @@ describe('carryForward', () => {
     // Undo should reverse the entire operation
     undo();
 
-    expect(blockData.value['s1'].content).toBe('- [ ] Task');
-    expect(blockData.value['s2'].content).toBe('- [ ] Subtask');
+    expect(blockData.value['s1']).toMatchObject({ kind: 'bullet', text: 'Task' });
+    expect(blockData.value['s1'].todo).toMatchObject({ status: 'todo', syntax: 'checkbox' });
+    expect(blockData.value['s2']).toMatchObject({ kind: 'bullet', text: 'Subtask' });
+    expect(blockData.value['s2'].todo).toMatchObject({ status: 'todo', syntax: 'checkbox' });
     const targetAfter = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetAfter).toHaveLength(0);
   });
@@ -2539,17 +2582,19 @@ describe('carryForward', () => {
     carryForward('s1', targetId);
 
     // Source: root gets link marker, complete child untouched, incomplete child gets link
-    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] Project X');
-    expect(blockData.value['s2'].content).toBe('- [[2026-04-08]] Task A');
-    expect(blockData.value['s3'].content).toBe('- [x] Task B');
+    expect(blockData.value['s1']).toMatchObject({ kind: 'bullet', text: '[[2026-04-08]] Project X' });
+    expect(blockData.value['s2']).toMatchObject({ kind: 'bullet', text: '[[2026-04-08]] Task A' });
+    expect(blockData.value['s3']).toMatchObject({ kind: 'bullet', text: 'Task B' });
+    expect(blockData.value['s3'].todo).toMatchObject({ status: 'done', syntax: 'checkbox' });
 
     // Target: root + incomplete child (complete child pruned)
     const targetBlocks = Object.values(blockData.value)
       .filter(b => b.pageId === targetId)
       .sort((a, b) => a.order - b.order);
     expect(targetBlocks).toHaveLength(2);
-    expect(targetBlocks[0].content).toBe('- Project X');
-    expect(targetBlocks[1].content).toBe('- [ ] Task A');
+    expect(targetBlocks[0]).toMatchObject({ kind: 'bullet', text: 'Project X' });
+    expect(targetBlocks[1]).toMatchObject({ kind: 'bullet', text: 'Task A' });
+    expect(targetBlocks[1].todo).toMatchObject({ status: 'todo', syntax: 'checkbox' });
     expect(targetBlocks[1].parent).toBe(targetBlocks[0].id);
   });
 
@@ -2561,9 +2606,10 @@ describe('carryForward', () => {
     carryForward('s1', targetId);
 
     // No-op: no incomplete todos anywhere in subtree
-    expect(blockData.value['s1'].content).toBe('- Project X');
-    expect(blockData.value['s2'].content).toBe('- [x] Done');
-    expect(blockData.value['s3'].content).toBe('- Just a note');
+    expect(blockData.value['s1']).toMatchObject({ kind: 'bullet', text: 'Project X' });
+    expect(blockData.value['s2']).toMatchObject({ kind: 'bullet', text: 'Done' });
+    expect(blockData.value['s2'].todo).toMatchObject({ status: 'done', syntax: 'checkbox' });
+    expect(blockData.value['s3']).toMatchObject({ kind: 'bullet', text: 'Just a note' });
     const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(0);
   });
@@ -2576,17 +2622,17 @@ describe('carryForward', () => {
     carryForward('s1', targetId);
 
     // Source: all three get markers (root and Phase 1 are non-todo, deep task is todo)
-    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] Project');
+    expect(blockData.value['s1']).toMatchObject({ kind: 'bullet', text: '[[2026-04-08]] Project' });
     expect(blockData.value['s2']).toBeUndefined(); // non-todo child moved
-    expect(blockData.value['s3'].content).toBe('- [[2026-04-08]] Deep task');
+    expect(blockData.value['s3']).toMatchObject({ kind: 'bullet', text: '[[2026-04-08]] Deep task' });
 
     // Target: full structure preserved
     const targetBlocks = Object.values(blockData.value)
       .filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(3);
-    const root = targetBlocks.find(b => b.content === '- Project')!;
-    const phase = targetBlocks.find(b => b.content === '- Phase 1')!;
-    const task = targetBlocks.find(b => b.content === '- [ ] Deep task')!;
+    const root = targetBlocks.find(b => b.text === 'Project')!;
+    const phase = targetBlocks.find(b => b.text === 'Phase 1')!;
+    const task = targetBlocks.find(b => b.text === 'Deep task')!;
     expect(root.parent).toBeNull();
     expect(phase.parent).toBe(root.id);
     expect(task.parent).toBe(phase.id);
@@ -2606,18 +2652,21 @@ describe('carryForwardAll', () => {
     carryForwardAll(sourceId, targetId);
 
     // Source: incomplete todos get links, complete and plain untouched
-    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] Task A');
-    expect(blockData.value['s2'].content).toBe('- [x] Done B');
-    expect(blockData.value['s3'].content).toBe('- [[2026-04-08]] Task C');
-    expect(blockData.value['s4'].content).toBe('- Plain text');
+    expect(blockData.value['s1']).toMatchObject({ kind: 'bullet', text: '[[2026-04-08]] Task A' });
+    expect(blockData.value['s2']).toMatchObject({ kind: 'bullet', text: 'Done B' });
+    expect(blockData.value['s2'].todo).toMatchObject({ status: 'done', syntax: 'checkbox' });
+    expect(blockData.value['s3']).toMatchObject({ kind: 'bullet', text: '[[2026-04-08]] Task C' });
+    expect(blockData.value['s4']).toMatchObject({ kind: 'bullet', text: 'Plain text' });
 
     // Target: only the two incomplete todos
     const targetBlocks = Object.values(blockData.value)
       .filter(b => b.pageId === targetId)
       .sort((a, b) => a.order - b.order);
     expect(targetBlocks).toHaveLength(2);
-    expect(targetBlocks[0].content).toBe('- [ ] Task A');
-    expect(targetBlocks[1].content).toBe('- [ ] Task C');
+    expect(targetBlocks[0]).toMatchObject({ kind: 'bullet', text: 'Task A' });
+    expect(targetBlocks[0].todo).toMatchObject({ status: 'todo', syntax: 'checkbox' });
+    expect(targetBlocks[1]).toMatchObject({ kind: 'bullet', text: 'Task C' });
+    expect(targetBlocks[1].todo).toMatchObject({ status: 'todo', syntax: 'checkbox' });
   });
 
   it('is a no-op when no incomplete todos exist', () => {
@@ -2629,8 +2678,9 @@ describe('carryForwardAll', () => {
 
     carryForwardAll(sourceId, targetId);
 
-    expect(blockData.value['s1'].content).toBe('- [x] Done');
-    expect(blockData.value['s2'].content).toBe('- Just text');
+    expect(blockData.value['s1']).toMatchObject({ kind: 'bullet', text: 'Done' });
+    expect(blockData.value['s1'].todo).toMatchObject({ status: 'done', syntax: 'checkbox' });
+    expect(blockData.value['s2']).toMatchObject({ kind: 'bullet', text: 'Just text' });
     const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(0);
   });
@@ -2649,8 +2699,10 @@ describe('carryForwardAll', () => {
 
     undo();
 
-    expect(blockData.value['s1'].content).toBe('- [ ] A');
-    expect(blockData.value['s2'].content).toBe('- [ ] B');
+    expect(blockData.value['s1']).toMatchObject({ kind: 'bullet', text: 'A' });
+    expect(blockData.value['s1'].todo).toMatchObject({ status: 'todo', syntax: 'checkbox' });
+    expect(blockData.value['s2']).toMatchObject({ kind: 'bullet', text: 'B' });
+    expect(blockData.value['s2'].todo).toMatchObject({ status: 'todo', syntax: 'checkbox' });
     expect(Object.values(blockData.value).filter(b => b.pageId === targetId)).toHaveLength(0);
   });
 
@@ -2664,16 +2716,16 @@ describe('carryForwardAll', () => {
 
     carryForwardAll(sourceId, targetId);
 
-    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] Flat todo');
-    expect(blockData.value['s2'].content).toBe('- [[2026-04-08]] Project X');
-    expect(blockData.value['s3'].content).toBe('- [[2026-04-08]] Nested todo');
+    expect(blockData.value['s1']).toMatchObject({ kind: 'bullet', text: '[[2026-04-08]] Flat todo' });
+    expect(blockData.value['s2']).toMatchObject({ kind: 'bullet', text: '[[2026-04-08]] Project X' });
+    expect(blockData.value['s3']).toMatchObject({ kind: 'bullet', text: '[[2026-04-08]] Nested todo' });
 
     const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(3);
 
-    const flatTodo = targetBlocks.find(b => b.content === '- [ ] Flat todo')!;
-    const project = targetBlocks.find(b => b.content === '- Project X')!;
-    const nested = targetBlocks.find(b => b.content === '- [ ] Nested todo')!;
+    const flatTodo = targetBlocks.find(b => b.text === 'Flat todo')!;
+    const project = targetBlocks.find(b => b.text === 'Project X')!;
+    const nested = targetBlocks.find(b => b.text === 'Nested todo')!;
 
     expect(flatTodo.parent).toBeNull();
     expect(project.parent).toBeNull();
@@ -2700,7 +2752,8 @@ describe('carryForward edge cases', () => {
     carryForward('s1', sourceId);
 
     // Block should be unchanged — no link to itself, no duplicates
-    expect(blockData.value['s1'].content).toBe('- [ ] Task');
+    expect(blockData.value['s1']).toMatchObject({ kind: 'bullet', text: 'Task' });
+    expect(blockData.value['s1'].todo).toMatchObject({ status: 'todo', syntax: 'checkbox' });
     const allOnSource = Object.values(blockData.value).filter(b => b.pageId === sourceId);
     expect(allOnSource).toHaveLength(1);
   });
@@ -2712,15 +2765,17 @@ describe('carryForward edge cases', () => {
     carryForward('s1', targetId);
     carryForward('s2', targetId);
 
-    expect(blockData.value['s1'].content).toBe('- [[2026-04-08]] In progress');
-    expect(blockData.value['s2'].content).toBe('- [[2026-04-08]] Blocked');
+    expect(blockData.value['s1']).toMatchObject({ kind: 'bullet', text: '[[2026-04-08]] In progress' });
+    expect(blockData.value['s2']).toMatchObject({ kind: 'bullet', text: '[[2026-04-08]] Blocked' });
 
     const targetBlocks = Object.values(blockData.value)
       .filter(b => b.pageId === targetId)
       .sort((a, b) => a.order - b.order);
     expect(targetBlocks).toHaveLength(2);
-    expect(targetBlocks[0].content).toBe('- DOING In progress');
-    expect(targetBlocks[1].content).toBe('- WAIT Blocked');
+    expect(targetBlocks[0]).toMatchObject({ kind: 'bullet', text: 'In progress' });
+    expect(targetBlocks[0].todo).toMatchObject({ status: 'doing', syntax: 'keyword' });
+    expect(targetBlocks[1]).toMatchObject({ kind: 'bullet', text: 'Blocked' });
+    expect(targetBlocks[1].todo).toMatchObject({ status: 'wait', syntax: 'keyword' });
   });
 
   it('handles interleaved complete, non-todo, and incomplete children', () => {
@@ -2733,7 +2788,8 @@ describe('carryForward edge cases', () => {
     carryForward('s1', targetId);
 
     // Source: complete child stays, non-todo children moved, todos get links
-    expect(blockData.value['s3'].content).toBe('- [x] Done step');
+    expect(blockData.value['s3']).toMatchObject({ kind: 'bullet', text: 'Done step' });
+    expect(blockData.value['s3'].todo).toMatchObject({ status: 'done', syntax: 'checkbox' });
     expect(blockData.value['s2']).toBeUndefined(); // moved
     expect(blockData.value['s4']).toBeUndefined(); // moved
 
@@ -2742,12 +2798,12 @@ describe('carryForward edge cases', () => {
       .filter(b => b.pageId === targetId)
       .sort((a, b) => a.order - b.order);
     expect(targetBlocks).toHaveLength(4);
-    const contents = targetBlocks.map(b => b.content);
-    expect(contents).toContain('- [ ] Task');
-    expect(contents).toContain('- notes A');
-    expect(contents).toContain('- notes B');
-    expect(contents).toContain('- [ ] Pending');
-    expect(contents).not.toContain('- [x] Done step');
+    const texts = targetBlocks.map(b => b.text);
+    expect(texts).toContain('Task');
+    expect(texts).toContain('notes A');
+    expect(texts).toContain('notes B');
+    expect(texts).toContain('Pending');
+    expect(texts).not.toContain('Done step');
   });
 
   it('reparents complete children when non-todo intermediate is deleted', () => {
@@ -2761,15 +2817,16 @@ describe('carryForward edge cases', () => {
     // Phase 1 (non-todo) was deleted from source
     expect(blockData.value['s2']).toBeUndefined();
     // [x] Done thing should be reparented to s1 (Root) on source
-    expect(blockData.value['s3'].content).toBe('- [x] Done thing');
+    expect(blockData.value['s3']).toMatchObject({ kind: 'bullet', text: 'Done thing' });
+    expect(blockData.value['s3'].todo).toMatchObject({ status: 'done', syntax: 'checkbox' });
     expect(blockData.value['s3'].parent).toBe('s1');
 
     // Target should have Root > Phase 1 > Pending thing
     const targetBlocks = Object.values(blockData.value).filter(b => b.pageId === targetId);
     expect(targetBlocks).toHaveLength(3);
-    const root = targetBlocks.find(b => b.content === '- [ ] Root')!;
-    const phase = targetBlocks.find(b => b.content === '- Phase 1')!;
-    const pending = targetBlocks.find(b => b.content === '- [ ] Pending thing')!;
+    const root = targetBlocks.find(b => b.text === 'Root')!;
+    const phase = targetBlocks.find(b => b.text === 'Phase 1')!;
+    const pending = targetBlocks.find(b => b.text === 'Pending thing')!;
     expect(phase.parent).toBe(root.id);
     expect(pending.parent).toBe(phase.id);
   });
@@ -2783,6 +2840,103 @@ describe('carryForward edge cases', () => {
     expect(targetBlocks).toHaveLength(1);
     // In v2 there's no `type` field; kind comes from content prefix.
     // A bare-todo paragraph stays bare on copy.
-    expect(targetBlocks[0].content).toBe('[ ] Task');
+    expect(targetBlocks[0].text).toBe('[ ] Task');
+    expect(targetBlocks[0].kind).toBe('paragraph');
+  });
+});
+
+// --- Deterministic page IDs ---
+
+describe('deterministic page IDs', () => {
+  it('getOrCreatePage produces the same ID for the same title', () => {
+    const id1 = getOrCreatePage('My Page');
+    // Reset and re-init to simulate a second device
+    reset();
+    const store = createMockStore();
+    // Don't init from store (empty) — just call getOrCreatePage again
+    const id2 = getOrCreatePage('My Page');
+    expect(id2).toBe(id1);
+  });
+
+  it('journal pages get deterministic IDs based on slug + folder', () => {
+    const id1 = getOrCreatePage('2026-04-16');
+    reset();
+    const id2 = getOrCreatePage('2026-04-16');
+    expect(id2).toBe(id1);
+  });
+
+});
+
+// --- Page dedup ---
+
+describe('page dedup on init', () => {
+  it('merges duplicate pages, keeping earliest createdAt', async () => {
+    const store = createMockStore();
+    // Pre-seed two pages with the same title but different UUIDs
+    const page1 = { title: 'My Page', slug: 'my-page', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    const page2 = { title: 'My Page', slug: 'my-page', createdAt: '2026-01-02T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' };
+    await store.Put({ key: encode('page/uuid-aaa'), value: encode(JSON.stringify(page1)) });
+    await store.Put({ key: encode('page/uuid-bbb'), value: encode(JSON.stringify(page2)) });
+    // Add blocks under each
+    await store.Put({ key: encode('block/b1'), value: encode(JSON.stringify({ content: '- block1', pageId: 'uuid-aaa', parent: null, order: 0 })) });
+    await store.Put({ key: encode('block/b2'), value: encode(JSON.stringify({ content: '- block2', pageId: 'uuid-bbb', parent: null, order: 0 })) });
+
+    reset();
+    await init(store);
+
+    // Only one page should survive
+    const pages = Object.values(pageData.value);
+    expect(pages).toHaveLength(1);
+    expect(pages[0].id).toBe('uuid-aaa'); // earliest createdAt wins
+    // Both blocks should now belong to the surviving page
+    expect(blockData.value['b1'].pageId).toBe('uuid-aaa');
+    expect(blockData.value['b2'].pageId).toBe('uuid-aaa');
+  });
+
+  it('does not merge pages with different titles', async () => {
+    const store = createMockStore();
+    await store.Put({ key: encode('page/p1'), value: encode(JSON.stringify({ title: 'Alpha', slug: 'alpha', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' })) });
+    await store.Put({ key: encode('page/p2'), value: encode(JSON.stringify({ title: 'Beta', slug: 'beta', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' })) });
+
+    reset();
+    await init(store);
+
+    expect(Object.keys(pageData.value)).toHaveLength(2);
+  });
+
+  it('dedup is case-insensitive', async () => {
+    const store = createMockStore();
+    await store.Put({ key: encode('page/p1'), value: encode(JSON.stringify({ title: 'Notes', slug: 'notes', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' })) });
+    await store.Put({ key: encode('page/p2'), value: encode(JSON.stringify({ title: 'notes', slug: 'notes', createdAt: '2026-01-02T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' })) });
+
+    reset();
+    await init(store);
+
+    expect(Object.keys(pageData.value)).toHaveLength(1);
+  });
+});
+
+describe('page dedup on watch', () => {
+  it('merges a duplicate page arriving via sync', async () => {
+    const store = createMockStore();
+    await init(store);
+
+    const pageId = getOrCreatePage('My Page');
+    saveBlock({ id: 'b1', content: '- hello', pageId, parent: null, order: 0 });
+
+    // Simulate another device creating the same page with a different UUID
+    const dupPage = { title: 'My Page', slug: 'my-page', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+    // Write a block under the duplicate before the page arrives
+    const dupBlock = { content: '- from other device', pageId: 'remote-uuid', parent: null, order: 0 };
+    await store.Put({ key: encode('block/b2'), value: encode(JSON.stringify(dupBlock)) });
+    // Now the duplicate page arrives via sync (triggers watch handler)
+    await store.Put({ key: encode('page/remote-uuid'), value: encode(JSON.stringify(dupPage)) });
+
+    // Should have merged: only one page, duplicate deleted
+    const pages = Object.values(pageData.value);
+    const myPages = pages.filter(p => p.title.toLowerCase() === 'my page');
+    expect(myPages).toHaveLength(1);
+    // The remote block should have been reparented
+    expect(blockData.value['b2'].pageId).toBe(myPages[0].id);
   });
 });

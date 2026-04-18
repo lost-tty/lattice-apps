@@ -1,30 +1,34 @@
 import { useRef, useLayoutEffect, useState } from 'preact/hooks';
 import { Content } from './renderContent';
 import { ActionMenu, SwipeRow, useLongPress, type ActionItem, type ActionMenuState } from '@ui';
-import { IconTrash, IconArrowRight } from './Icons';
+import { IconTrash, IconArrowRight, IconChevronRight } from './Icons';
 import type { FlatBlock } from './db';
+import type { Block } from './types';
 import {
   activeBlockId, blockData, pageData,
   saveBlock, deleteBlock, buildTree, flattenTree, hasChildren, toggleCollapse,
-  blockKind, canAcceptChildren, isCollapsed, blockToMarkdown, markdownToBlock,
+  blockKind, canAcceptChildren, isCollapsed, blockToMarkdown,
+  setBlockMarkdown, blockText,
   navigateTo, getOrCreatePage,
 } from './db';
 import { beginUndo, commitUndo, undo, redo } from './undo';
-import { classifyBlock, parseHeading, parseAnnotations, cycleTodoStatus, parseTableCells, todaySlug } from './parse';
+import { parseAnnotations, cycleTodoStatus, parseTableCells, todaySlug } from './parse';
 import { createBlockAfter, createChildBlock, indentBlock, outdentBlock, removeBlock, joinBlockWithPrevious, moveBlock, isDescendant, carryForward, hasIncompleteTodos } from './blockOps';
 import { createTable, insertTableRow } from './table';
 import { parseMarkdownToItems, insertBlocksAfter } from './importExport';
 import { getCursorOffset, setCursor } from './dom';
-import { shared, clearDropIndicators, INDENT_PX, activateBlock, getVisualDepth, startBlockDrag, continuationContent } from './editorState';
+import { shared, clearDropIndicators, INDENT_PX, activateBlock, getVisualDepth, startBlockDrag, continuationContent, normalizeEditorInput } from './editorState';
 
 export function BlockItem({ node }: { node: FlatBlock }) {
   const isActive = activeBlockId.value === node.id;
   const ref = useRef<HTMLDivElement>(null);
   const hasKids = hasChildren(node.id);
-  const isHr = node.content === '---';
+  const isHr = node.kind === 'hrule';
 
   // Edit mode: show markdown source.
   const md = blockToMarkdown(node);
+  // For cursor-positioning: how many chars of `md` are the prefix (e.g. "- ").
+  const editorPrefixLen = md.length - blockText(node).length;
 
   useLayoutEffect(() => {
     if (!isActive || !ref.current) return;
@@ -33,24 +37,40 @@ export function BlockItem({ node }: { node: FlatBlock }) {
     shared.pendingActivation = null;
     el.textContent = md;
     el.focus();
-    setCursor(el, activation?.cursor ?? 'end', md.length - node.content.length);
+    setCursor(el, activation?.cursor ?? 'end', editorPrefixLen);
   }, [isActive]);
 
-  /** Parse editor text back to block fields and save. */
-  function saveFromEditor() {
-    const { content } = markdownToBlock(ref.current?.textContent || '');
+  /** Parse editor text back to block fields and save. On blur, if the
+   *  block never held any text (it was empty before the edit *and* it's
+   *  still empty after — the user typed a prefix like `- ` / `# ` or
+   *  nothing at all and clicked away), we drop the block entirely via
+   *  removeBlock. This covers blocks that were auto-created by the
+   *  "click into blank area" handler but never received content.
+   *  Intentional content clears (bullet `foo` → bullet empty) still
+   *  commit because current had text. Enter / Tab / Arrow handlers pass
+   *  `onBlur=false` to commit unconditionally. */
+  function saveFromEditor(onBlur = false) {
+    const md = normalizeEditorInput(ref.current?.textContent || '');
     const current = blockData.value[node.id];
     if (!current) return;
-    if (content !== current.content) {
-      saveBlock({ ...current, content });
+    const next = setBlockMarkdown(current, md);
+    if (onBlur && blockText(current) === '' && blockText(next) === '') {
+      removeBlock(current.id);
+      return;
+    }
+    if (blockToMarkdown(next) !== blockToMarkdown(current)) {
+      saveBlock(next);
     }
   }
 
   function handleKeyDown(e: KeyboardEvent) {
     const el = ref.current!;
-    const rawText = el.textContent || '';
-    const { content } = markdownToBlock(rawText);
-    const prefixLen = rawText.length - content.length;
+    // Editor's textContent is the raw markdown the user sees, normalized
+    // via normalizeEditorInput (undoes contentEditable's NBSP substitution
+    // so a just-typed `- ` / `# ` parses correctly). Downstream parse
+    // boundaries handle alt markers (`*`, `+`) on their own.
+    const content = normalizeEditorInput(el.textContent || '');
+    const prefixLen = 0;
 
     // Undo / Redo
     if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
@@ -78,19 +98,17 @@ export function BlockItem({ node }: { node: FlatBlock }) {
       const before = content.slice(0, contentOffset);
       const after = content.slice(contentOffset);
 
-      // Is the block we're splitting a bullet? Its tail/new sibling has to
-      // carry the bullet prefix or it'll be classified as a paragraph.
-      const isBulletBlock = classifyBlock(content).kind === 'bullet';
-      const asBullet = (text: string) => {
-        const stripped = text.startsWith('- ') ? text.slice(2) : text;
-        return '- ' + stripped;
-      };
+      // Derive the post-split current block by applying `before` through
+      // the typed parser, so `updated.kind` is fresh (the user may have
+      // *just* typed `- ` into a paragraph and hit Enter — `node.kind` is
+      // still `paragraph`, but `updated.kind` is `bullet`).
+      const updated = setBlockMarkdown(node, before);
 
       if (before === '') {
         beginUndo('split block');
         // Current becomes an empty block of the same kind so the outline
-        // shape doesn't change. Bullets stay bullets (empty `- `).
-        saveBlock({ ...node, content: isBulletBlock ? '- ' : '' });
+        // shape doesn't change.
+        saveBlock(setBlockMarkdown(node, node.kind === 'bullet' ? '- ' : ''));
         const newId = createBlockAfter(node.id, content);
         commitUndo();
         activateBlock(newId, 'start');
@@ -98,23 +116,24 @@ export function BlockItem({ node }: { node: FlatBlock }) {
       }
 
       beginUndo('split block');
-      saveBlock({ ...node, content: before });
+      saveBlock(updated);
 
-      const { level } = parseHeading(before);
-      if (level) {
-        // Splitting a heading: the tail becomes a child bullet, not a raw
-        // paragraph, so the heading gets a proper first list item.
-        const childContent = after ? asBullet(after) : '- ';
-        const newId = createChildBlock(node.id, childContent);
+      if (updated.kind === 'heading') {
+        // Enter under a heading creates a child paragraph (not a bullet) —
+        // a heading isn't necessarily a list container; if the user wants
+        // bullets under it they can type `- `.
+        const newId = createChildBlock(node.id, after);
         commitUndo();
         activateBlock(newId, 'start');
         return;
       }
 
-      // Normal split: sibling of same kind. Bullets inherit bullet prefix;
-      // paragraphs stay bare.
-      const tail = after || continuationContent(node);
-      const newContent = isBulletBlock ? asBullet(tail) : tail;
+      // Mid-split carries `after` (bare) into a sibling of the same kind;
+      // end-split uses `continuationContent(updated)` — already includes any
+      // `- ` / `- [ ] ` / `- TODO ` prefix, so we must not add another one.
+      const newContent = after !== ''
+        ? (updated.kind === 'bullet' ? '- ' + after : after)
+        : continuationContent(updated);
       const newId = createBlockAfter(node.id, newContent);
       commitUndo();
       activateBlock(newId, newContent ? 'end' : 'start');
@@ -177,7 +196,7 @@ export function BlockItem({ node }: { node: FlatBlock }) {
   function handleBlur() {
     if (!ref.current) return;
     if (activeBlockId.value === node.id) {
-      saveFromEditor();
+      saveFromEditor(true);
       activeBlockId.value = null;
     }
   }
@@ -189,9 +208,8 @@ export function BlockItem({ node }: { node: FlatBlock }) {
     e.preventDefault();
 
     const el = ref.current!;
-    const rawText = el.textContent ?? '';
-    const { content } = markdownToBlock(rawText);
-    const contentOffset = Math.max(0, getCursorOffset(el) - (rawText.length - content.length));
+    const content = normalizeEditorInput(el.textContent ?? '');
+    const contentOffset = Math.max(0, getCursorOffset(el));
     const before = content.slice(0, contentOffset);
     const after = content.slice(contentOffset);
 
@@ -205,7 +223,7 @@ export function BlockItem({ node }: { node: FlatBlock }) {
     }));
 
     beginUndo('paste');
-    saveBlock({ ...node, content: merged[0].content });
+    saveBlock(setBlockMarkdown(node, merged[0].content));
 
     if (merged.length === 1) {
       commitUndo();
@@ -235,7 +253,10 @@ export function BlockItem({ node }: { node: FlatBlock }) {
     if (target.classList.contains('todo-marker')) {
       e.stopPropagation();
       const current = blockData.value[node.id];
-      if (current) saveBlock({ ...current, content: cycleTodoStatus(current.content) });
+      if (current) {
+        const cycled = cycleTodoStatus(blockToMarkdown(current));
+        saveBlock(setBlockMarkdown(current, cycled));
+      }
       return;
     }
     activeBlockId.value = node.id;
@@ -315,10 +336,9 @@ export function BlockItem({ node }: { node: FlatBlock }) {
   // --- Parsed block metadata ---
 
   const collapsed = hasKids && isCollapsed(node.id);
-  const kind = classifyBlock(node.content);
-  const level = kind.kind === 'heading' ? kind.level : null;
-  const status = kind.kind === 'bullet' ? kind.todo?.status ?? null : null;
-  const headingText = 'text' in kind ? kind.text : '';
+  const level = node.kind === 'heading' ? node.level : null;
+  const status = node.kind === 'bullet' ? node.todo?.status ?? null : null;
+  const headingText = blockText(node);
 
   // --- Block actions (used by context menu, long-press, and swipe) ---
 
@@ -339,7 +359,7 @@ export function BlockItem({ node }: { node: FlatBlock }) {
           label: 'Carry forward to today',
           icon: <IconArrowRight />,
           onAction: () => {
-            const targetPageId = getOrCreatePage(today, 'journals');
+            const targetPageId = getOrCreatePage(today);
             carryForward(node.id, targetPageId);
           },
         });
@@ -386,23 +406,28 @@ export function BlockItem({ node }: { node: FlatBlock }) {
 
   const visualDepth = getVisualDepth(node);
 
+  const depthStyle = isHr && !isActive ? '--depth: 0' : `--depth: ${visualDepth}`;
+
+  const gutterEl = (
+    <span
+      class={`gutter${hasKids ? ' has-children' : ''}${isCollapsed(node.id) ? ' collapsed' : ''}`}
+      draggable
+      onClick={(e: Event) => { if (hasKids) { e.stopPropagation(); toggleCollapse(node.id); } }}
+      onDragStart={(e: Event) => handleDragStart(e as DragEvent)}
+    >{hasKids && <IconChevronRight />}</span>
+  );
+
   const blockInner = (
     <div
       ref={blockRef}
       class="block"
-      style={isHr && !isActive ? '--depth: 0' : `--depth: ${visualDepth}`}
+      style={depthStyle}
       onContextMenu={(e: Event) => handleContextMenu(e as MouseEvent)}
       onDragOver={(e: Event) => handleDragOver(e as DragEvent)}
       onDragLeave={(e: Event) => handleDragLeave(e as DragEvent)}
       onDrop={(e: Event) => handleDrop(e as DragEvent)}
       onDragEnd={handleDragEnd}
     >
-      <span
-        class={`gutter${hasKids ? ' has-children' : ''}${isCollapsed(node.id) ? ' collapsed' : ''}`}
-        draggable
-        onClick={(e: Event) => { if (hasKids) { e.stopPropagation(); toggleCollapse(node.id); } }}
-        onDragStart={(e: Event) => handleDragStart(e as DragEvent)}
-      />
       {isHr && !isActive ? (
         <hr onClick={handleClick} />
       ) : isActive ? (
@@ -418,7 +443,7 @@ export function BlockItem({ node }: { node: FlatBlock }) {
         />
       ) : (
         <div key="view" class={contentClass} onClick={handleClick}>
-          {kind.kind === 'bullet' && <span class="bullet-marker" />}
+          {node.kind === 'bullet' && <span class="bullet-marker" />}
           {status && <span class={`todo-marker ${status}`} />}
           <span><Content text={viewText} fallback={<br />} /></span>
           {collapsed && (
@@ -429,15 +454,19 @@ export function BlockItem({ node }: { node: FlatBlock }) {
     </div>
   );
 
-  // Only wrap in SwipeRow when not actively editing — horizontal swipes
-  // inside a contenteditable conflict with iOS's text cursor gestures.
-  // ActionMenu is rendered as a sibling, *outside* SwipeRow, because
-  // SwipeRow's `transform` on `.swipe-row-content` creates a containing
-  // block that traps `position: fixed` and the menu would otherwise be
-  // clipped by `.swipe-row { overflow: hidden }`.
+  // Gutter lives outside SwipeRow so its negative `left` offset at
+  // depth-0 isn't clipped by `.swipe-row { overflow: hidden }`. The
+  // `.block-row` wrapper is the shared positioned ancestor for absolute
+  // gutter positioning and carries `--depth` for both children.
+  // ActionMenu is rendered as a sibling of SwipeRow (not inside it)
+  // because SwipeRow's transform creates a containing block that
+  // traps `position: fixed` and the menu would otherwise be clipped.
   return (
     <>
-      {isActive ? blockInner : <SwipeRow actions={buildActions()}>{blockInner}</SwipeRow>}
+      <div class="block-row" style={depthStyle}>
+        {gutterEl}
+        {isActive ? blockInner : <SwipeRow actions={buildActions()}>{blockInner}</SwipeRow>}
+      </div>
       <ActionMenu menu={menu} onClose={() => setMenu(null)} />
     </>
   );

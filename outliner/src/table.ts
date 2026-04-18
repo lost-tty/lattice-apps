@@ -34,12 +34,12 @@ export function createTable(
   const next = siblings[idx + 1];
   const tableOrder = orderBetween(after.order, next?.order);
   const tableId = crypto.randomUUID();
-  saveBlock({ id: tableId, content: '', pageId: after.pageId, parent: after.parent, order: tableOrder, layout: 'grid' });
+  saveBlock({ id: tableId, kind: 'grid', pageId: after.pageId, parent: after.parent, order: tableOrder });
 
   for (let r = 0; r < rows.length; r++) {
     for (let c = 0; c < rows[r].length; c++) {
       const id = crypto.randomUUID();
-      saveBlock({ id, content: rows[r][c], pageId: after.pageId, parent: tableId, order: r, col: c });
+      saveBlock({ id, kind: 'paragraph', text: rows[r][c], pageId: after.pageId, parent: tableId, order: r, col: c });
     }
   }
 
@@ -69,7 +69,7 @@ export function insertTableRow(tableId: string, afterRowOrder?: number): string[
   const ids: string[] = [];
   for (let c = 0; c < colCount; c++) {
     const id = crypto.randomUUID();
-    saveBlock({ id, content: '', pageId: table.pageId, parent: tableId, order: rowOrder, col: colOrders[c] });
+    saveBlock({ id, kind: 'paragraph', text: '', pageId: table.pageId, parent: tableId, order: rowOrder, col: colOrders[c] });
     ids.push(id);
   }
   return ids;
@@ -99,7 +99,7 @@ export function insertTableCol(tableId: string, afterColOrder?: number): string[
   const ids: string[] = [];
   for (const row of grid) {
     const id = crypto.randomUUID();
-    saveBlock({ id, content: '', pageId: table.pageId, parent: tableId, order: row.order, col: colOrder });
+    saveBlock({ id, kind: 'paragraph', text: '', pageId: table.pageId, parent: tableId, order: row.order, col: colOrder });
     ids.push(id);
   }
   return ids;
