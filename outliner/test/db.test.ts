@@ -4,7 +4,7 @@ import { buildTar, parseTar } from '../src/tar';
 import {
   init, reset, pageData, blockData,
   savePage, getOrCreatePage, deletePage,
-  saveBlock as _rawSaveBlock, deleteBlock,
+  saveBlock, deleteBlock, setBlockMarkdown,
   buildTree, flattenTree, getSiblings, validateTree,
   hasChildren, toggleCollapse, isCollapsed, collapsedBlocks,
   getBacklinks,
@@ -12,47 +12,6 @@ import {
   pageTitle, pageList, isTentativePage,
 } from '../src/db';
 import type { Block } from '../src/types';
-import { parseStoredBlock } from '../src/parse';
-
-/** Test-only compatibility wrapper over `saveBlock`.
- *
- *  Historical fixtures here set `type: 'bullet' | 'paragraph' | 'table'`
- *  and stored bare content; this wrapper translates them on the fly into
- *  the current schema (`content` prefix + `layout`) so the large existing
- *  fixture base keeps working without a mass rewrite.
- *
- *  NEW TESTS should write the current shape directly and skip `type`:
- *
- *    saveBlock({ content: '- foo', ... })                    // bullet
- *    saveBlock({ content: '# H', ... })                      // heading
- *    saveBlock({ content: 'prose', ... })                    // paragraph
- *    saveBlock({ content: '', layout: 'grid', ... })         // grid container
- *
- *  The wrapper is a bridge, not a preferred API. */
-function saveBlock(block: any) {
-  const { id, type, content = '', layout, col, ...rest } = block;
-  // Translate v1/v2 fixture shape into the on-disk StoredBlock shape, then
-  // run it through parseStoredBlock to produce the typed in-memory Block
-  // the real saveBlock now expects.
-  let storedContent = content;
-  let storedLayout = layout;
-  if (type === 'table') {
-    storedContent = '';
-    storedLayout = 'grid';
-  } else if (type === 'paragraph' || col !== undefined) {
-    // bare content, no bullet prefix
-  } else {
-    const alreadyMigrated =
-      content === '' ||
-      content === '- ' ||
-      content.startsWith('- ') ||
-      /^#{1,6} /.test(content) ||
-      content === '---';
-    storedContent = alreadyMigrated ? content : '- ' + content;
-  }
-  const stored = { ...rest, content: storedContent, col, layout: storedLayout };
-  return _rawSaveBlock(parseStoredBlock(stored, id));
-}
 import { beginUndo, commitUndo, undo, redo } from '../src/undo';
 import {
   parseWikiLinks, isTableRow, isTableSeparator, parseTableCells, parseHeading,
@@ -166,35 +125,35 @@ describe('init and CRUD', () => {
 
   it('saveBlock updates signal and store', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'hi', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "hi" });
     expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'hi' });
   });
 
   it('saveBlock auto-sets createdAt on new blocks', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "a" });
     expect(blockData.value['1'].createdAt).toBeDefined();
   });
 
   it('saveBlock sets updatedAt on every save', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "a" });
     expect(blockData.value['1'].updatedAt).toBeDefined();
   });
 
   it('saveBlock preserves existing createdAt on updates', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0, createdAt: '2020-01-01' });
-    saveBlock({ ...blockData.value['1'], content: 'b' });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, createdAt: '2020-01-01', kind: 'bullet', text: "a" });
+    saveBlock(setBlockMarkdown(blockData.value['1'], "- b"));
     expect(blockData.value['1'].createdAt).toBe('2020-01-01');
   });
 
   it('deleteBlock removes block and descendants', async () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'parent', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
-    saveBlock({ id: '3', content: 'grandchild', pageId, parent: '2', order: 0 });
-    saveBlock({ id: '4', content: 'sibling', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "parent" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child" });
+    saveBlock({ id: '3', pageId: pageId, parent: '2', order: 0, kind: 'bullet', text: "grandchild" });
+    saveBlock({ id: '4', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "sibling" });
 
     await deleteBlock('1');
     expect(blockData.value['1']).toBeUndefined();
@@ -206,9 +165,9 @@ describe('init and CRUD', () => {
   it('deletePage removes all blocks and the page itself', async () => {
     const pageId1 = getOrCreatePage('p1');
     const pageId2 = getOrCreatePage('p2');
-    saveBlock({ id: '1', content: 'a', pageId: pageId1, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'b', pageId: pageId1, parent: null, order: 1 });
-    saveBlock({ id: '3', content: 'c', pageId: pageId2, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId1, parent: null, order: 0, kind: 'bullet', text: "a" });
+    saveBlock({ id: '2', pageId: pageId1, parent: null, order: 1, kind: 'bullet', text: "b" });
+    saveBlock({ id: '3', pageId: pageId2, parent: null, order: 0, kind: 'bullet', text: "c" });
 
     await deletePage(pageId1);
     expect(blockData.value['1']).toBeUndefined();
@@ -224,9 +183,9 @@ describe('init and CRUD', () => {
 describe('buildTree', () => {
   it('builds nested tree from flat blocks', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'root1', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
-    saveBlock({ id: '3', content: 'root2', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "root1" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child" });
+    saveBlock({ id: '3', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "root2" });
 
     const tree = buildTree(pageId);
     expect(tree.length).toBe(2);
@@ -239,8 +198,8 @@ describe('buildTree', () => {
 
   it('sorts by order', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: 'b', content: 'second', pageId, parent: null, order: 5 });
-    saveBlock({ id: 'a', content: 'first', pageId, parent: null, order: 2 });
+    saveBlock({ id: 'b', pageId: pageId, parent: null, order: 5, kind: 'bullet', text: "second" });
+    saveBlock({ id: 'a', pageId: pageId, parent: null, order: 2, kind: 'bullet', text: "first" });
 
     const tree = buildTree(pageId);
     expect(tree[0].id).toBe('a');
@@ -250,8 +209,8 @@ describe('buildTree', () => {
   it('only includes blocks for the given page', () => {
     const pageId1 = getOrCreatePage('p1');
     const pageId2 = getOrCreatePage('p2');
-    saveBlock({ id: '1', content: 'a', pageId: pageId1, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'b', pageId: pageId2, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId1, parent: null, order: 0, kind: 'bullet', text: "a" });
+    saveBlock({ id: '2', pageId: pageId2, parent: null, order: 0, kind: 'bullet', text: "b" });
 
     expect(buildTree(pageId1).length).toBe(1);
     expect(buildTree(pageId1)[0].id).toBe('1');
@@ -261,11 +220,11 @@ describe('buildTree', () => {
 describe('flattenTree', () => {
   it('returns pre-order traversal with correct depths', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'root', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'child1', pageId, parent: '1', order: 0 });
-    saveBlock({ id: '3', content: 'grandchild', pageId, parent: '2', order: 0 });
-    saveBlock({ id: '4', content: 'child2', pageId, parent: '1', order: 1 });
-    saveBlock({ id: '5', content: 'root2', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "root" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child1" });
+    saveBlock({ id: '3', pageId: pageId, parent: '2', order: 0, kind: 'bullet', text: "grandchild" });
+    saveBlock({ id: '4', pageId: pageId, parent: '1', order: 1, kind: 'bullet', text: "child2" });
+    saveBlock({ id: '5', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "root2" });
 
     const flat = flattenTree(buildTree(pageId));
     expect(flat.map(b => b.id)).toEqual(['1', '2', '3', '4', '5']);
@@ -278,8 +237,8 @@ describe('flattenTree', () => {
 describe('createBlockAfter', () => {
   it('creates a block between siblings', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'first', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'second', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "first" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "second" });
 
     const newId = createBlockAfter('1', '- between');
     const block = blockData.value[newId];
@@ -292,7 +251,7 @@ describe('createBlockAfter', () => {
 
   it('creates a block at the end', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'only', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "only" });
 
     const newId = createBlockAfter('1', '- after');
     expect(blockData.value[newId].order).toBeGreaterThan(0);
@@ -300,8 +259,8 @@ describe('createBlockAfter', () => {
 
   it('preserves parent context', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'parent', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "parent" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child" });
 
     const newId = createBlockAfter('2', '- new child');
     expect(blockData.value[newId].parent).toBe('1');
@@ -309,13 +268,14 @@ describe('createBlockAfter', () => {
 
   it('simulated Enter: split block and activeBlockId points to new block', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'hello world', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "hello world" });
 
     // Simulate Enter at offset 5: "hello" stays, " world" goes to new block.
-    // In v2, the new block's content carries the bullet prefix: "- " + " world".
-    const before = 'hello';
+    // Both halves carry the bullet prefix — the editor's textContent IS
+    // the markdown form, so callers of setBlockMarkdown pass prefixed text.
+    const before = '- hello';
     const after = '-  world';
-    saveBlock({ ...blockData.value['1'], content: before });
+    saveBlock(setBlockMarkdown(blockData.value['1'], before));
     const newId = createBlockAfter('1', after);
     activeBlockId.value = newId;
 
@@ -334,8 +294,8 @@ describe('createBlockAfter', () => {
 describe('createChildBlock', () => {
   it('creates a block as the last child of the parent', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
-    saveBlock({ id: '2', content: 'existing', pageId, parent: '1', order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'heading', text: "Section", level: 1 });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "existing" });
 
     const newId = createChildBlock('1', '- new child');
     const block = blockData.value[newId];
@@ -346,7 +306,7 @@ describe('createChildBlock', () => {
 
   it('creates first child when parent has no children', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'heading', text: "Section", level: 1 });
 
     const newId = createChildBlock('1', '- first');
     expect(blockData.value[newId].parent).toBe('1');
@@ -356,8 +316,8 @@ describe('createChildBlock', () => {
 describe('indentBlock', () => {
   it('makes block a child of previous sibling', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'b', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "a" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "b" });
 
     indentBlock('2');
     expect(blockData.value['2'].parent).toBe('1');
@@ -365,7 +325,7 @@ describe('indentBlock', () => {
 
   it('does nothing for first sibling', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "a" });
 
     indentBlock('1');
     expect(blockData.value['1'].parent).toBeNull();
@@ -373,8 +333,8 @@ describe('indentBlock', () => {
 
   it('does not nest under a paragraph block', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'para', pageId, parent: null, order: 0, type: 'paragraph' });
-    saveBlock({ id: '2', content: 'item', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'paragraph', text: "para" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "item" });
 
     indentBlock('2');
     expect(blockData.value['2'].parent).toBeNull();
@@ -382,8 +342,8 @@ describe('indentBlock', () => {
 
   it('nests under a heading block', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
-    saveBlock({ id: '2', content: 'item', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'heading', text: "Section", level: 1 });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "item" });
 
     indentBlock('2');
     expect(blockData.value['2'].parent).toBe('1');
@@ -391,8 +351,8 @@ describe('indentBlock', () => {
 
   it('does not indent a heading block', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'item', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: '# Heading', pageId, parent: null, order: 1, type: 'paragraph' });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "item" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'heading', text: "Heading", level: 1 });
 
     indentBlock('2');
     expect(blockData.value['2'].parent).toBeNull();
@@ -402,8 +362,8 @@ describe('indentBlock', () => {
 describe('outdentBlock', () => {
   it('makes block a sibling of its parent', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'parent', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "parent" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child" });
 
     outdentBlock('2');
     expect(blockData.value['2'].parent).toBeNull();
@@ -412,7 +372,7 @@ describe('outdentBlock', () => {
 
   it('does nothing for root blocks', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'root', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "root" });
 
     outdentBlock('1');
     expect(blockData.value['1'].parent).toBeNull();
@@ -420,8 +380,8 @@ describe('outdentBlock', () => {
 
   it('does not outdent past a heading parent', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
-    saveBlock({ id: '2', content: 'item', pageId, parent: '1', order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'heading', text: "Section", level: 1 });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "item" });
 
     outdentBlock('2');
     expect(blockData.value['2'].parent).toBe('1');
@@ -429,8 +389,8 @@ describe('outdentBlock', () => {
 
   it('does not outdent a heading block', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'parent', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: '## Sub', pageId, parent: '1', order: 0, type: 'paragraph' });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "parent" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'heading', text: "Sub", level: 2 });
 
     outdentBlock('2');
     expect(blockData.value['2'].parent).toBe('1');
@@ -440,8 +400,8 @@ describe('outdentBlock', () => {
 describe('removeBlock', () => {
   it('removes block and returns previous block id', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'b', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "a" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "b" });
 
     const prevId = removeBlock('2');
     expect(prevId).toBe('1');
@@ -450,7 +410,7 @@ describe('removeBlock', () => {
 
   it('does not remove the only block on the page', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'only', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "only" });
 
     const prevId = removeBlock('1');
     expect(prevId).toBeNull();
@@ -459,8 +419,8 @@ describe('removeBlock', () => {
 
   it('removes the first block when there are following blocks', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'b', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'paragraph', text: "" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "b" });
 
     const nextId = removeBlock('1');
     expect(nextId).toBe('2');
@@ -470,9 +430,9 @@ describe('removeBlock', () => {
 
   it('does not remove block with children', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'parent', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
-    saveBlock({ id: '3', content: 'other', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "parent" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child" });
+    saveBlock({ id: '3', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "other" });
 
     const prevId = removeBlock('1');
     expect(prevId).toBeNull();
@@ -483,8 +443,8 @@ describe('removeBlock', () => {
 describe('joinBlockWithPrevious', () => {
   it('concatenates content without implicit space', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'hello', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'world', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "hello" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "world" });
 
     const result = joinBlockWithPrevious('2', 'world');
     expect(result).not.toBeNull();
@@ -496,8 +456,8 @@ describe('joinBlockWithPrevious', () => {
 
   it('preserves existing trailing space', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'hello ', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'world', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "hello " });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "world" });
 
     const result = joinBlockWithPrevious('2', 'world');
     expect(result).not.toBeNull();
@@ -509,7 +469,7 @@ describe('joinBlockWithPrevious', () => {
 
   it('returns null for the first block on the page', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'only block', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "only block" });
 
     const result = joinBlockWithPrevious('1', 'only block');
     expect(result).toBeNull();
@@ -518,9 +478,9 @@ describe('joinBlockWithPrevious', () => {
 
   it('works across nesting levels (previous in flat tree order)', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'parent', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
-    saveBlock({ id: '3', content: 'next', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "parent" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child" });
+    saveBlock({ id: '3', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "next" });
 
     const result = joinBlockWithPrevious('3', 'next');
     expect(result!.prevId).toBe('2');
@@ -530,8 +490,8 @@ describe('joinBlockWithPrevious', () => {
 
   it('joins empty block with previous block', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'hello', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: '', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "hello" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'paragraph', text: "" });
 
     const result = joinBlockWithPrevious('2', '');
     expect(result).not.toBeNull();
@@ -702,8 +662,8 @@ describe('parseMarkdownToItems', () => {
 describe('insertBlocksAfter', () => {
   it('inserts flat items as siblings after the anchor', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '- a', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: '- z', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "a" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "z" });
 
     insertBlocksAfter('1', [
       { content: 'b', relativeDepth: 0 },
@@ -721,7 +681,7 @@ describe('insertBlocksAfter', () => {
 
   it('inserts nested items at the correct depth', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '- root', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "root" });
 
     insertBlocksAfter('1', [
       { content: 'sibling',     relativeDepth: 0 },
@@ -742,7 +702,7 @@ describe('insertBlocksAfter', () => {
 
   it('returns the id of the last inserted block', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '- a', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "a" });
 
     const lastId = insertBlocksAfter('1', [
       { content: 'b', relativeDepth: 0 },
@@ -754,9 +714,9 @@ describe('insertBlocksAfter', () => {
 
   it('inserts between existing siblings, not after them', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '- a', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: '- b', pageId, parent: null, order: 1 });
-    saveBlock({ id: '3', content: '- z', pageId, parent: null, order: 2 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "a" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "b" });
+    saveBlock({ id: '3', pageId: pageId, parent: null, order: 2, kind: 'bullet', text: "z" });
 
     insertBlocksAfter('2', [{ content: 'inserted', relativeDepth: 0 }]);
 
@@ -771,9 +731,9 @@ describe('insertBlocksAfter', () => {
 
   it('depth-0 items land after the anchor\'s existing children in flat order', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '- anchor', pageId, parent: null,  order: 0 });
-    saveBlock({ id: '2', content: '- child',  pageId, parent: '1',   order: 0 });
-    saveBlock({ id: '3', content: '- next',   pageId, parent: null,  order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "anchor" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child" });
+    saveBlock({ id: '3', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "next" });
 
     insertBlocksAfter('1', [{ content: 'inserted', relativeDepth: 0 }]);
 
@@ -822,34 +782,34 @@ const COMPLEX_PAGE_MD = [
 describe('exportPage', () => {
   it('serialises a flat list', () => {
     const pageId = getOrCreatePage('export-flat');
-    saveBlock({ id: '1', content: 'alpha', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'beta',  pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "alpha" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "beta" });
     expect(exportPage(pageId)).toBe('- alpha\n- beta');
   });
 
   it('exports headings and --- without bullet prefix, with blank lines', () => {
     const pageId = getOrCreatePage('export-headings');
-    saveBlock({ id: '1', content: '# Title',      pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'bullet',        pageId, parent: null, order: 1 });
-    saveBlock({ id: '3', content: '---',           pageId, parent: null, order: 2 });
-    saveBlock({ id: '4', content: '## Subtitle',   pageId, parent: null, order: 3 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'heading', text: "Title", level: 1 });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "bullet" });
+    saveBlock({ id: '3', pageId: pageId, parent: null, order: 2, kind: 'hrule' });
+    saveBlock({ id: '4', pageId: pageId, parent: null, order: 3, kind: 'heading', text: "Subtitle", level: 2 });
     expect(exportPage(pageId)).toBe('# Title\n\n- bullet\n\n---\n\n## Subtitle');
   });
 
   it('exports paragraph blocks without bullet prefix, with blank line separation', () => {
     const pageId = getOrCreatePage('export-para');
-    saveBlock({ id: '1', content: 'intro text', pageId, parent: null, order: 0, type: 'paragraph' });
-    saveBlock({ id: '2', content: 'bullet item', pageId, parent: null, order: 1 });
-    saveBlock({ id: '3', content: 'conclusion',  pageId, parent: null, order: 2, type: 'paragraph' });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'paragraph', text: "intro text" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "bullet item" });
+    saveBlock({ id: '3', pageId: pageId, parent: null, order: 2, kind: 'paragraph', text: "conclusion" });
     expect(exportPage(pageId)).toBe('intro text\n\n- bullet item\n\nconclusion');
   });
 
   it('indents children by two spaces per depth level', () => {
     const pageId = getOrCreatePage('export-nested');
-    saveBlock({ id: '1', content: 'root',        pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'child',       pageId, parent: '1',  order: 0 });
-    saveBlock({ id: '3', content: 'grandchild',  pageId, parent: '2',  order: 0 });
-    saveBlock({ id: '4', content: 'sibling',     pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "root" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child" });
+    saveBlock({ id: '3', pageId: pageId, parent: '2', order: 0, kind: 'bullet', text: "grandchild" });
+    saveBlock({ id: '4', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "sibling" });
     expect(exportPage(pageId)).toBe(
       '- root\n  - child\n    - grandchild\n- sibling',
     );
@@ -859,10 +819,10 @@ describe('exportPage', () => {
     // Simulate orphan: child at depth 1 but no parent at depth 0 before it
     const pageId = getOrCreatePage('export-orphan');
     // Block at depth 1 (child of a "phantom" parent) followed by a root block
-    saveBlock({ id: '1', content: 'orphan-child', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "orphan-child" });
     // Manually create a child without a visible parent
-    saveBlock({ id: '2', content: 'nested', pageId, parent: '1', order: 0 });
-    saveBlock({ id: '3', content: 'deep', pageId, parent: '2', order: 0 });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "nested" });
+    saveBlock({ id: '3', pageId: pageId, parent: '2', order: 0, kind: 'bullet', text: "deep" });
     // Export: orphan-child is depth 0, nested is depth 1 (valid), deep is depth 2 (valid)
     expect(exportPage(pageId)).toBe(
       '- orphan-child\n  - nested\n    - deep',
@@ -872,14 +832,14 @@ describe('exportPage', () => {
   it('collapses orphan grandchild that skips a depth level', () => {
     const pageId = getOrCreatePage('export-skip');
     // root at depth 0, then directly a grandchild at depth 2 (no depth 1 between)
-    saveBlock({ id: '1', content: 'root', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "root" });
     // Create grandchild by making a child, then giving the grandchild the child as parent
-    saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
-    saveBlock({ id: '3', content: 'grandchild', pageId, parent: '2', order: 0 });
-    saveBlock({ id: '4', content: 'orphan-deep', pageId, parent: null, order: 1 });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child" });
+    saveBlock({ id: '3', pageId: pageId, parent: '2', order: 0, kind: 'bullet', text: "grandchild" });
+    saveBlock({ id: '4', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "orphan-deep" });
     // Create a block that would be at depth 2 with no depth 1 sibling before it
-    saveBlock({ id: '5', content: 'nested-under-orphan', pageId, parent: '4', order: 0 });
-    saveBlock({ id: '6', content: 'too-deep', pageId, parent: '5', order: 0 });
+    saveBlock({ id: '5', pageId: pageId, parent: '4', order: 0, kind: 'bullet', text: "nested-under-orphan" });
+    saveBlock({ id: '6', pageId: pageId, parent: '5', order: 0, kind: 'bullet', text: "too-deep" });
     // Export: block 4 is a new top-level bullet (depth 0 resets context)
     // block 5 can only be depth 1 (one deeper than 0), block 6 can be depth 2
     expect(exportPage(pageId)).toBe(
@@ -891,18 +851,18 @@ describe('exportPage', () => {
 describe('validateTree', () => {
   it('does nothing to a well-formed tree', () => {
     const pageId = getOrCreatePage('vt-ok');
-    saveBlock({ id: '1', content: 'root',   pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'child',  pageId, parent: '1',  order: 0 });
-    saveBlock({ id: '3', content: 'sibling', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "root" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child" });
+    saveBlock({ id: '3', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "sibling" });
     expect(validateTree(pageId)).toBe(0);
   });
 
   it('reparents orphan blocks whose parent is missing', () => {
     const pageId = getOrCreatePage('vt-orphan');
-    saveBlock({ id: '1', content: 'root',   pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "root" });
     // Block 2 claims parent 'missing' which doesn't exist —
     // buildTree places it at root level, validateTree should confirm parent: null
-    saveBlock({ id: '2', content: 'orphan', pageId, parent: 'missing', order: 1 });
+    saveBlock({ id: '2', pageId: pageId, parent: 'missing', order: 1, kind: 'bullet', text: "orphan" });
     const repaired = validateTree(pageId);
     // The orphan should now have parent: null (at root)
     expect(blockData.value['2'].parent).toBeNull();
@@ -911,15 +871,15 @@ describe('validateTree', () => {
 
   it('repairs depth gaps (grandchild with no child between)', () => {
     const pageId = getOrCreatePage('vt-gap');
-    saveBlock({ id: '1', content: 'root',       pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'child',      pageId, parent: '1',  order: 0 });
-    saveBlock({ id: '3', content: 'grandchild', pageId, parent: '2',  order: 0 });
-    saveBlock({ id: '4', content: 'next-root',  pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "root" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child" });
+    saveBlock({ id: '3', pageId: pageId, parent: '2', order: 0, kind: 'bullet', text: "grandchild" });
+    saveBlock({ id: '4', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "next-root" });
     // Manually skip depth: block 5 claims parent '4' (depth 0 → depth 1),
     // and block 6 claims parent '5' (depth 1 → depth 2). That's valid.
     // But if we give block 5 parent '3' it would be at depth 3... validateTree
     // sees it after 'next-root' (depth 0), so it should be at most depth 1.
-    saveBlock({ id: '5', content: 'ok-child', pageId, parent: '4', order: 0 });
+    saveBlock({ id: '5', pageId: pageId, parent: '4', order: 0, kind: 'bullet', text: "ok-child" });
     const before = validateTree(pageId);
     expect(before).toBe(0); // already valid
     const flat = flattenTree(buildTree(pageId));
@@ -943,7 +903,7 @@ describe('importPage', () => {
 
   it('replaces all existing blocks on the page', () => {
     const pageId = getOrCreatePage('import-replace');
-    saveBlock({ id: 'old', content: 'old content', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'old', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "old content" });
     importPage(pageId, '- fresh');
     const flat = flattenTree(buildTree(pageId));
     expect(flat).toHaveLength(1);
@@ -985,9 +945,9 @@ describe('roundtrip: export → import → export', () => {
 describe('exportAllPages', () => {
   it('returns an entry per page with slug-based filename', () => {
     const id1 = getOrCreatePage('My Notes');
-    saveBlock({ id: 'b1', content: 'hello', pageId: id1, parent: null, order: 0 });
+    saveBlock({ id: 'b1', pageId: id1, parent: null, order: 0, kind: 'bullet', text: "hello" });
     const id2 = getOrCreatePage('2026-03-27');
-    saveBlock({ id: 'b2', content: 'today', pageId: id2, parent: null, order: 0 });
+    saveBlock({ id: 'b2', pageId: id2, parent: null, order: 0, kind: 'bullet', text: "today" });
 
     const entries = exportAllPages();
     const paths = entries.map(e => e.path);
@@ -1042,8 +1002,8 @@ describe('importAllPages', () => {
   it('full roundtrip: exportAllPages → buildTar → parseTar → importAllPages', async () => {
     // Set up source data
     const id1 = getOrCreatePage('Roundtrip Test');
-    saveBlock({ id: 'r1', content: '# Title', pageId: id1, parent: null, order: 0 });
-    saveBlock({ id: 'r2', content: 'bullet', pageId: id1, parent: 'r1', order: 0 });
+    saveBlock({ id: 'r1', pageId: id1, parent: null, order: 0, kind: 'heading', text: "Title", level: 1 });
+    saveBlock({ id: 'r2', pageId: id1, parent: 'r1', order: 0, kind: 'bullet', text: "bullet" });
 
     // Export → tar → parse
     const exported = exportAllPages();
@@ -1160,7 +1120,7 @@ describe('table detection', () => {
 describe('table data model', () => {
   it('createTable creates a table block with cell children', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: 'anchor', content: 'before', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'anchor', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "before" });
 
     const tableId = createTable('anchor', [
       ['Name', 'Age'],
@@ -1180,12 +1140,12 @@ describe('table data model', () => {
   it('getTableGrid returns rows sorted by order and cells sorted by col', () => {
     const pageId = getOrCreatePage('p');
     const tableId = 'tbl';
-    saveBlock({ id: tableId, content: '', pageId, parent: null, order: 0, type: 'table' });
+    saveBlock({ id: tableId, pageId: pageId, parent: null, order: 0, kind: 'grid' });
     // Insert in reverse order
-    saveBlock({ id: 'c22', content: 'D', pageId, parent: tableId, order: 1, col: 1 });
-    saveBlock({ id: 'c11', content: 'A', pageId, parent: tableId, order: 0, col: 0 });
-    saveBlock({ id: 'c21', content: 'C', pageId, parent: tableId, order: 1, col: 0 });
-    saveBlock({ id: 'c12', content: 'B', pageId, parent: tableId, order: 0, col: 1 });
+    saveBlock({ id: 'c22', pageId: pageId, parent: tableId, order: 1, col: 1, kind: 'paragraph', text: "D" });
+    saveBlock({ id: 'c11', pageId: pageId, parent: tableId, order: 0, col: 0, kind: 'paragraph', text: "A" });
+    saveBlock({ id: 'c21', pageId: pageId, parent: tableId, order: 1, col: 0, kind: 'paragraph', text: "C" });
+    saveBlock({ id: 'c12', pageId: pageId, parent: tableId, order: 0, col: 1, kind: 'paragraph', text: "B" });
 
     const grid = getTableGrid(tableId);
     expect(grid.map(r => r.cells.map(c => c.text))).toEqual([
@@ -1196,7 +1156,7 @@ describe('table data model', () => {
 
   it('insertTableRow appends a row with correct column count', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: 'anchor', content: '', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'anchor', pageId: pageId, parent: null, order: 0, kind: 'paragraph', text: "" });
     const tableId = createTable('anchor', [['H1', 'H2', 'H3']]);
 
     const newCells = insertTableRow(tableId);
@@ -1208,7 +1168,7 @@ describe('table data model', () => {
 
   it('insertTableRow inserts between existing rows', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: 'anchor', content: '', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'anchor', pageId: pageId, parent: null, order: 0, kind: 'paragraph', text: "" });
     const tableId = createTable('anchor', [['A'], ['C']]);
 
     const grid = getTableGrid(tableId);
@@ -1222,7 +1182,7 @@ describe('table data model', () => {
 
   it('insertTableCol appends a column to every row', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: 'anchor', content: '', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'anchor', pageId: pageId, parent: null, order: 0, kind: 'paragraph', text: "" });
     const tableId = createTable('anchor', [['A', 'B'], ['C', 'D']]);
 
     insertTableCol(tableId);
@@ -1234,7 +1194,7 @@ describe('table data model', () => {
 
   it('insertTableCol inserts between existing columns', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: 'anchor', content: '', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'anchor', pageId: pageId, parent: null, order: 0, kind: 'paragraph', text: "" });
     const tableId = createTable('anchor', [['A', 'C'], ['D', 'F']]);
 
     const grid = getTableGrid(tableId);
@@ -1245,7 +1205,7 @@ describe('table data model', () => {
   });
   it('reorderTableRow moves a row before another', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: 'anchor', content: '', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'anchor', pageId: pageId, parent: null, order: 0, kind: 'paragraph', text: "" });
     const tableId = createTable('anchor', [['A'], ['B'], ['C']]);
 
     const grid = getTableGrid(tableId);
@@ -1257,7 +1217,7 @@ describe('table data model', () => {
 
   it('reorderTableRow moves a row after another', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: 'anchor', content: '', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'anchor', pageId: pageId, parent: null, order: 0, kind: 'paragraph', text: "" });
     const tableId = createTable('anchor', [['A'], ['B'], ['C']]);
 
     const grid = getTableGrid(tableId);
@@ -1269,7 +1229,7 @@ describe('table data model', () => {
 
   it('reorderTableCol moves a column before another', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: 'anchor', content: '', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'anchor', pageId: pageId, parent: null, order: 0, kind: 'paragraph', text: "" });
     const tableId = createTable('anchor', [['A', 'B', 'C'], ['D', 'E', 'F']]);
 
     const grid = getTableGrid(tableId);
@@ -1284,7 +1244,7 @@ describe('table data model', () => {
 
   it('reorderTableCol moves a column after another', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: 'anchor', content: '', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'anchor', pageId: pageId, parent: null, order: 0, kind: 'paragraph', text: "" });
     const tableId = createTable('anchor', [['A', 'B', 'C'], ['D', 'E', 'F']]);
 
     const grid = getTableGrid(tableId);
@@ -1299,7 +1259,7 @@ describe('table data model', () => {
 
   it('deleteTableRow removes all cells in a row', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: 'anchor', content: '', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'anchor', pageId: pageId, parent: null, order: 0, kind: 'paragraph', text: "" });
     const tableId = createTable('anchor', [['A', 'B'], ['C', 'D'], ['E', 'F']]);
 
     const grid = getTableGrid(tableId);
@@ -1312,7 +1272,7 @@ describe('table data model', () => {
 
   it('deleteTableCol removes all cells in a column', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: 'anchor', content: '', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'anchor', pageId: pageId, parent: null, order: 0, kind: 'paragraph', text: "" });
     const tableId = createTable('anchor', [['A', 'B', 'C'], ['D', 'E', 'F']]);
 
     const grid = getTableGrid(tableId);
@@ -1325,7 +1285,7 @@ describe('table data model', () => {
 
   it('deleting the last row removes the table block itself', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: 'anchor', content: '', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'anchor', pageId: pageId, parent: null, order: 0, kind: 'paragraph', text: "" });
     const tableId = createTable('anchor', [['only']]);
 
     deleteTableRow(tableId, 0);
@@ -1356,7 +1316,7 @@ describe('table import/export', () => {
 
   it('exportPage serialises table blocks as Markdown tables', () => {
     const pageId = getOrCreatePage('table-export');
-    saveBlock({ id: 'anchor', content: 'intro', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'anchor', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "intro" });
     createTable('anchor', [['Name', 'Age'], ['Alice', '30']]);
     const md = exportPage(pageId);
     expect(md).toContain('| Name | Age |');
@@ -1492,10 +1452,10 @@ describe('getBacklinks', () => {
     const targetId = getOrCreatePage('target');
     const sourceId = getOrCreatePage('source');
     const otherId = getOrCreatePage('other');
-    saveBlock({ id: '1', content: 'links to [[target]]', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'no link', pageId: sourceId, parent: null, order: 1 });
-    saveBlock({ id: '3', content: 'also [[target]]', pageId: otherId, parent: null, order: 0 });
-    saveBlock({ id: '4', content: 'self [[target]]', pageId: targetId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "links to [[target]]" });
+    saveBlock({ id: '2', pageId: sourceId, parent: null, order: 1, kind: 'bullet', text: "no link" });
+    saveBlock({ id: '3', pageId: otherId, parent: null, order: 0, kind: 'bullet', text: "also [[target]]" });
+    saveBlock({ id: '4', pageId: targetId, parent: null, order: 0, kind: 'bullet', text: "self [[target]]" });
 
     const links = getBacklinks(targetId);
     expect(links.length).toBe(2);
@@ -1505,8 +1465,8 @@ describe('getBacklinks', () => {
   it('finds blocks referencing a page via #tag', () => {
     const projectId = getOrCreatePage('project');
     const sourceId = getOrCreatePage('source');
-    saveBlock({ id: '1', content: 'hello #project', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'no ref', pageId: sourceId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "hello #project" });
+    saveBlock({ id: '2', pageId: sourceId, parent: null, order: 1, kind: 'bullet', text: "no ref" });
 
     const links = getBacklinks(projectId);
     expect(links.length).toBe(1);
@@ -1516,7 +1476,7 @@ describe('getBacklinks', () => {
   it('finds blocks referencing a page via #[[multi word]] tag', () => {
     const targetId = getOrCreatePage('My Project');
     const sourceId = getOrCreatePage('notes');
-    saveBlock({ id: '1', content: 'see #[[My Project]] for details', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "see #[[My Project]] for details" });
 
     const links = getBacklinks(targetId);
     expect(links.length).toBe(1);
@@ -1526,8 +1486,8 @@ describe('getBacklinks', () => {
   it('finds blocks referencing a page via hierarchical #tag with slashes', () => {
     const targetId = getOrCreatePage('project/frontend');
     const sourceId = getOrCreatePage('notes');
-    saveBlock({ id: '1', content: 'see #project/frontend for details', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'no ref here', pageId: sourceId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "see #project/frontend for details" });
+    saveBlock({ id: '2', pageId: sourceId, parent: null, order: 1, kind: 'bullet', text: "no ref here" });
 
     const links = getBacklinks(targetId);
     expect(links.length).toBe(1);
@@ -1537,9 +1497,9 @@ describe('getBacklinks', () => {
   it('includes children of referencing blocks', () => {
     const targetId = getOrCreatePage('target');
     const sourceId = getOrCreatePage('source');
-    saveBlock({ id: '1', content: 'mentions [[target]]', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: '1a', content: 'child detail', pageId: sourceId, parent: '1', order: 0 });
-    saveBlock({ id: '1b', content: 'another child', pageId: sourceId, parent: '1', order: 1 });
+    saveBlock({ id: '1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "mentions [[target]]" });
+    saveBlock({ id: '1a', pageId: sourceId, parent: '1', order: 0, kind: 'bullet', text: "child detail" });
+    saveBlock({ id: '1b', pageId: sourceId, parent: '1', order: 1, kind: 'bullet', text: "another child" });
 
     const links = getBacklinks(targetId);
     expect(links.length).toBe(1);
@@ -1552,7 +1512,7 @@ describe('getBacklinks', () => {
   it('returns empty for no backlinks', () => {
     const targetId = getOrCreatePage('target');
     const sourceId = getOrCreatePage('source');
-    saveBlock({ id: '1', content: 'nothing here', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "nothing here" });
     expect(getBacklinks(targetId)).toEqual([]);
   });
 });
@@ -1575,7 +1535,7 @@ describe('navigateTo', () => {
 
   it('does not create block if page already has blocks', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'existing', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "existing" });
     navigateTo('p');
     expect(currentPage.value).toBe(pageId);
     const blocks = Object.values(blockData.value).filter(b => b.pageId === pageId);
@@ -1584,7 +1544,7 @@ describe('navigateTo', () => {
 
   it('navigateById sets currentPage to the given page ID', () => {
     const pageId = getOrCreatePage('mypage');
-    saveBlock({ id: '1', content: 'x', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "x" });
     navigateById(pageId);
     expect(currentPage.value).toBe(pageId);
   });
@@ -1620,7 +1580,7 @@ describe('navigateTo', () => {
 
     // Simulate typing — save block with content
     const blocks = Object.values(blockData.value).filter(b => b.pageId === pageId);
-    saveBlock({ ...blocks[0], content: 'hello world' });
+    saveBlock(setBlockMarkdown(blocks[0], "- hello world"));
 
     // Page should now be persisted
     expect(isTentativePage(pageId)).toBe(false);
@@ -1640,7 +1600,7 @@ describe('navigateTo', () => {
 
     // Navigate away without typing
     const otherId = getOrCreatePage('real-page');
-    saveBlock({ id: 'r1', content: 'real', pageId: otherId, parent: null, order: 0 });
+    saveBlock({ id: 'r1', pageId: otherId, parent: null, order: 0, kind: 'bullet', text: "real" });
     navigateTo('real-page');
 
     // Tentative page should be gone
@@ -1651,7 +1611,7 @@ describe('navigateTo', () => {
 
   it('existing page with content is not tentative', () => {
     const pageId = getOrCreatePage('solid');
-    saveBlock({ id: '1', content: 'has content', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "has content" });
     navigateTo('solid');
     expect(isTentativePage(pageId)).toBe(false);
   });
@@ -1746,15 +1706,15 @@ describe('journal helpers', () => {
 describe('collapse', () => {
   it('hasChildren returns true when block has children', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'parent', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "parent" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child" });
     expect(hasChildren('1')).toBe(true);
     expect(hasChildren('2')).toBe(false);
   });
 
   it('toggleCollapse toggles local collapsed state', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "a" });
     expect(isCollapsed('1')).toBe(false);
     toggleCollapse('1');
     expect(isCollapsed('1')).toBe(true);
@@ -1764,9 +1724,9 @@ describe('collapse', () => {
 
   it('flattenTree hides children of collapsed blocks', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'root', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
-    saveBlock({ id: '3', content: 'root2', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "root" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child" });
+    saveBlock({ id: '3', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "root2" });
     toggleCollapse('1');
 
     const flat = flattenTree(buildTree(pageId));
@@ -1775,9 +1735,9 @@ describe('collapse', () => {
 
   it('flattenTree shows children when not collapsed', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'root', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
-    saveBlock({ id: '3', content: 'root2', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "root" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child" });
+    saveBlock({ id: '3', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "root2" });
 
     const flat = flattenTree(buildTree(pageId));
     expect(flat.map(b => b.id)).toEqual(['1', '2', '3']);
@@ -1785,10 +1745,10 @@ describe('collapse', () => {
 
   it('deeply nested collapse only hides direct subtree', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'root', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
-    saveBlock({ id: '3', content: 'grandchild', pageId, parent: '2', order: 0 });
-    saveBlock({ id: '4', content: 'child2', pageId, parent: '1', order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "root" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child" });
+    saveBlock({ id: '3', pageId: pageId, parent: '2', order: 0, kind: 'bullet', text: "grandchild" });
+    saveBlock({ id: '4', pageId: pageId, parent: '1', order: 1, kind: 'bullet', text: "child2" });
     toggleCollapse('2');
 
     const flat = flattenTree(buildTree(pageId));
@@ -1797,10 +1757,10 @@ describe('collapse', () => {
 
   it('heading blocks with children can be collapsed', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
-    saveBlock({ id: '2', content: 'item A',     pageId, parent: '1',  order: 0 });
-    saveBlock({ id: '3', content: 'item B',     pageId, parent: '1',  order: 1 });
-    saveBlock({ id: '4', content: 'after',      pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'heading', text: "Section", level: 1 });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "item A" });
+    saveBlock({ id: '3', pageId: pageId, parent: '1', order: 1, kind: 'bullet', text: "item B" });
+    saveBlock({ id: '4', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "after" });
 
     expect(hasChildren('1')).toBe(true);
 
@@ -1815,10 +1775,10 @@ describe('collapse', () => {
 
   it('heading collapse exports without the collapsed children', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
-    saveBlock({ id: '2', content: 'item A',     pageId, parent: '1',  order: 0 });
-    saveBlock({ id: '3', content: '## Sub',     pageId, parent: '1',  order: 1, type: 'paragraph' });
-    saveBlock({ id: '4', content: 'item B',     pageId, parent: '3',  order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'heading', text: "Section", level: 1 });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "item A" });
+    saveBlock({ id: '3', pageId: pageId, parent: '1', order: 1, kind: 'heading', text: "Sub", level: 2 });
+    saveBlock({ id: '4', pageId: pageId, parent: '3', order: 0, kind: 'bullet', text: "item B" });
 
     // Export includes all content (collapse is a UI-only state, export always flattens)
     const md = exportPage(pageId);
@@ -1831,9 +1791,9 @@ describe('collapse', () => {
 describe('moveBlock', () => {
   it('moves block after target as sibling', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'b', pageId, parent: null, order: 1 });
-    saveBlock({ id: '3', content: 'c', pageId, parent: null, order: 2 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "a" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "b" });
+    saveBlock({ id: '3', pageId: pageId, parent: null, order: 2, kind: 'bullet', text: "c" });
 
     moveBlock('3', '1', 'after');
     const b3 = blockData.value['3'];
@@ -1844,9 +1804,9 @@ describe('moveBlock', () => {
 
   it('moves block before target', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'b', pageId, parent: null, order: 1 });
-    saveBlock({ id: '3', content: 'c', pageId, parent: null, order: 2 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "a" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "b" });
+    saveBlock({ id: '3', pageId: pageId, parent: null, order: 2, kind: 'bullet', text: "c" });
 
     moveBlock('3', '1', 'before');
     expect(blockData.value['3'].order).toBeLessThan(blockData.value['1'].order);
@@ -1854,8 +1814,8 @@ describe('moveBlock', () => {
 
   it('nests block as child of target', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'b', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "a" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "b" });
 
     moveBlock('2', '1', 'nested');
     expect(blockData.value['2'].parent).toBe('1');
@@ -1863,8 +1823,8 @@ describe('moveBlock', () => {
 
   it('prevents dropping block onto its own descendant', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'parent', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "parent" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child" });
 
     moveBlock('1', '2', 'nested');
     expect(blockData.value['1'].parent).toBeNull();
@@ -1872,7 +1832,7 @@ describe('moveBlock', () => {
 
   it('prevents dropping block onto itself', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "a" });
     const orderBefore = blockData.value['1'].order;
     moveBlock('1', '1', 'after');
     expect(blockData.value['1'].order).toBe(orderBefore);
@@ -1880,9 +1840,9 @@ describe('moveBlock', () => {
 
   it('moves subtree with parent block', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'b', pageId, parent: null, order: 1 });
-    saveBlock({ id: '3', content: 'child of 2', pageId, parent: '2', order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "a" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "b" });
+    saveBlock({ id: '3', pageId: pageId, parent: '2', order: 0, kind: 'bullet', text: "child of 2" });
 
     moveBlock('2', '1', 'before');
     expect(blockData.value['3'].parent).toBe('2');
@@ -1891,9 +1851,9 @@ describe('moveBlock', () => {
 
   it('nests as first child when the target already has children', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'parent', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'existing child', pageId, parent: '1', order: 0 });
-    saveBlock({ id: '3', content: 'to nest', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "parent" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "existing child" });
+    saveBlock({ id: '3', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "to nest" });
 
     moveBlock('3', '1', 'nested');
 
@@ -1903,8 +1863,8 @@ describe('moveBlock', () => {
 
   it('does not nest under a paragraph block', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'para', pageId, parent: null, order: 0, type: 'paragraph' });
-    saveBlock({ id: '2', content: 'item', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'paragraph', text: "para" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "item" });
 
     moveBlock('2', '1', 'nested');
 
@@ -1913,8 +1873,8 @@ describe('moveBlock', () => {
 
   it('nests under a heading block via drag', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
-    saveBlock({ id: '2', content: 'item', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'heading', text: "Section", level: 1 });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "item" });
 
     moveBlock('2', '1', 'nested');
 
@@ -1923,7 +1883,7 @@ describe('moveBlock', () => {
 
   it('moves a table block before a sibling', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'Item', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "Item" });
     const tableId = createTable('1', [['A', 'B'], ['C', 'D']]);
 
     // Table is after Item; move it before
@@ -1939,8 +1899,8 @@ describe('moveBlock', () => {
 
   it('moves a table block nested under another block', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'Parent', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'Sibling', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "Parent" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "Sibling" });
     const tableId = createTable('2', [['X']]);
 
     moveBlock(tableId, '1', 'nested');
@@ -1953,7 +1913,7 @@ describe('moveBlock', () => {
 
   it('moves a bullet after a table block', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'Item', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "Item" });
     const tableId = createTable('1', [['A']]);
 
     moveBlock('1', tableId, 'after');
@@ -1967,10 +1927,10 @@ describe('moveBlock', () => {
     //   ## Heading 2      (child of H1)
     //     Another para    (child of H2)
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '# Heading 1',       pageId, parent: null, order: 0, type: 'paragraph' });
-    saveBlock({ id: '2', content: 'Paragraph',          pageId, parent: '1',  order: 0 });
-    saveBlock({ id: '3', content: '## Heading 2',       pageId, parent: '1',  order: 1, type: 'paragraph' });
-    saveBlock({ id: '4', content: 'Another paragraph',  pageId, parent: '3',  order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'heading', text: "Heading 1", level: 1 });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "Paragraph" });
+    saveBlock({ id: '3', pageId: pageId, parent: '1', order: 1, kind: 'heading', text: "Heading 2", level: 2 });
+    saveBlock({ id: '4', pageId: pageId, parent: '3', order: 0, kind: 'bullet', text: "Another paragraph" });
 
     // Drag ## Heading 2 BEFORE Paragraph (both children of # Heading 1)
     moveBlock('3', '2', 'before');
@@ -1988,12 +1948,12 @@ describe('moveBlock', () => {
     const pageB = getOrCreatePage('Page B');
 
     // Page A has a parent block with two levels of children
-    saveBlock({ id: 'p1', content: 'parent', pageId: pageA, parent: null, order: 0 });
-    saveBlock({ id: 'c1', content: 'child', pageId: pageA, parent: 'p1', order: 0 });
-    saveBlock({ id: 'gc1', content: 'grandchild', pageId: pageA, parent: 'c1', order: 0 });
+    saveBlock({ id: 'p1', pageId: pageA, parent: null, order: 0, kind: 'bullet', text: "parent" });
+    saveBlock({ id: 'c1', pageId: pageA, parent: 'p1', order: 0, kind: 'bullet', text: "child" });
+    saveBlock({ id: 'gc1', pageId: pageA, parent: 'c1', order: 0, kind: 'bullet', text: "grandchild" });
 
     // Page B has a target block
-    saveBlock({ id: 't1', content: 'target', pageId: pageB, parent: null, order: 0 });
+    saveBlock({ id: 't1', pageId: pageB, parent: null, order: 0, kind: 'bullet', text: "target" });
 
     // Move p1 (with children) to page B, nested under t1
     moveBlock('p1', 't1', 'nested');
@@ -2009,8 +1969,8 @@ describe('moveBlock', () => {
 describe('fixHeadingSections', () => {
   it('reparents non-headings that follow a heading', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '# Section',  pageId, parent: null, order: 0, type: 'paragraph' });
-    saveBlock({ id: '2', content: 'orphan item', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'heading', text: "Section", level: 1 });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "orphan item" });
 
     fixHeadingSections(pageId, null);
 
@@ -2019,8 +1979,8 @@ describe('fixHeadingSections', () => {
 
   it('does nothing when no headings are present', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'b', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "a" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "b" });
 
     fixHeadingSections(pageId, null);
 
@@ -2030,9 +1990,9 @@ describe('fixHeadingSections', () => {
 
   it('non-headings before the first heading stay as siblings', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'before',     pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: '# Heading',  pageId, parent: null, order: 1, type: 'paragraph' });
-    saveBlock({ id: '3', content: 'after',       pageId, parent: null, order: 2 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "before" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'heading', text: "Heading", level: 1 });
+    saveBlock({ id: '3', pageId: pageId, parent: null, order: 2, kind: 'bullet', text: "after" });
 
     fixHeadingSections(pageId, null);
 
@@ -2044,10 +2004,10 @@ describe('fixHeadingSections', () => {
 
   it('multiple headings each capture their own section', () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '# A',   pageId, parent: null, order: 0, type: 'paragraph' });
-    saveBlock({ id: '2', content: 'item1', pageId, parent: null, order: 1 });
-    saveBlock({ id: '3', content: '# B',   pageId, parent: null, order: 2, type: 'paragraph' });
-    saveBlock({ id: '4', content: 'item2', pageId, parent: null, order: 3 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'heading', text: "A", level: 1 });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "item1" });
+    saveBlock({ id: '3', pageId: pageId, parent: null, order: 2, kind: 'heading', text: "B", level: 1 });
+    saveBlock({ id: '4', pageId: pageId, parent: null, order: 3, kind: 'bullet', text: "item2" });
 
     fixHeadingSections(pageId, null);
 
@@ -2064,10 +2024,10 @@ describe('moveBlock + fixHeadingSections integration', () => {
     // Move # Heading into another parent → source level (root) has only
     // item A and item B, no heading → they stay as root siblings.
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '# Heading', pageId, parent: null, order: 0, type: 'paragraph' });
-    saveBlock({ id: '2', content: 'item A',    pageId, parent: '1',  order: 0 });
-    saveBlock({ id: '3', content: 'item B',    pageId, parent: '1',  order: 1 });
-    saveBlock({ id: '4', content: 'target',    pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'heading', text: "Heading", level: 1 });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "item A" });
+    saveBlock({ id: '3', pageId: pageId, parent: '1', order: 1, kind: 'bullet', text: "item B" });
+    saveBlock({ id: '4', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "target" });
 
     // Move heading nested under target (heading can nest under a bullet)
     moveBlock('1', '4', 'nested');
@@ -2083,9 +2043,9 @@ describe('moveBlock + fixHeadingSections integration', () => {
   it('heading dropped after non-heading captures it', () => {
     // Two root bullets, then drop a heading between them
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'item A',    pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'item B',    pageId, parent: null, order: 1 });
-    saveBlock({ id: '3', content: '# Section', pageId, parent: null, order: 2, type: 'paragraph' });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "item A" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "item B" });
+    saveBlock({ id: '3', pageId: pageId, parent: null, order: 2, kind: 'heading', text: "Section", level: 1 });
 
     // Move heading AFTER item A (before item B)
     moveBlock('3', '1', 'after');
@@ -2109,8 +2069,8 @@ describe('undo / redo', () => {
 
   it('undoes a single saveBlock', () => {
     const pageId = setup();
-    saveBlock({ id: '1', content: 'original', pageId, parent: null, order: 0 });
-    saveBlock({ ...blockData.value['1'], content: 'edited' });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "original" });
+    saveBlock(setBlockMarkdown(blockData.value['1'], "- edited"));
 
     expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'edited' });
     undo();
@@ -2119,8 +2079,8 @@ describe('undo / redo', () => {
 
   it('redoes after undo', () => {
     const pageId = setup();
-    saveBlock({ id: '1', content: 'original', pageId, parent: null, order: 0 });
-    saveBlock({ ...blockData.value['1'], content: 'edited' });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "original" });
+    saveBlock(setBlockMarkdown(blockData.value['1'], "- edited"));
 
     undo();
     expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'original' });
@@ -2130,12 +2090,12 @@ describe('undo / redo', () => {
 
   it('undoes a grouped operation', () => {
     const pageId = setup();
-    saveBlock({ id: '1', content: 'hello world', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "hello world" });
 
     // Simulate Enter: split into two blocks
     beginUndo('split');
-    saveBlock({ ...blockData.value['1'], content: 'hello' });
-    saveBlock({ id: '2', content: '- world', pageId, parent: null, order: 1 });
+    saveBlock(setBlockMarkdown(blockData.value['1'], "- hello"));
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "world" });
     commitUndo();
 
     expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'hello' });
@@ -2148,8 +2108,8 @@ describe('undo / redo', () => {
 
   it('undoes deleteBlock (restores deleted blocks)', () => {
     const pageId = setup();
-    saveBlock({ id: '1', content: 'parent', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'child', pageId, parent: '1', order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "parent" });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "child" });
 
     beginUndo('delete');
     deleteBlock('1');
@@ -2168,7 +2128,7 @@ describe('undo / redo', () => {
 
   it('redo after undo of delete', () => {
     const pageId = setup();
-    saveBlock({ id: '1', content: 'item', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "item" });
 
     beginUndo('delete');
     deleteBlock('1');
@@ -2183,22 +2143,22 @@ describe('undo / redo', () => {
 
   it('new edit clears redo stack', () => {
     const pageId = setup();
-    saveBlock({ id: '1', content: 'a', pageId, parent: null, order: 0 });
-    saveBlock({ ...blockData.value['1'], content: 'b' });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "a" });
+    saveBlock(setBlockMarkdown(blockData.value['1'], "- b"));
 
     undo();
     expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'a' });
 
     // New edit should clear redo
-    saveBlock({ ...blockData.value['1'], content: 'c' });
+    saveBlock(setBlockMarkdown(blockData.value['1'], "- c"));
     redo(); // should do nothing
     expect(blockData.value['1']).toMatchObject({ kind: 'bullet', text: 'c' });
   });
 
   it('undoes moveBlock', () => {
     const pageId = setup();
-    saveBlock({ id: '1', content: 'A', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'B', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "A" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "B" });
 
     beginUndo('move');
     moveBlock('2', '1', 'before');
@@ -2235,11 +2195,11 @@ describe('batch accumulation', () => {
     await init(spy);
 
     const pageId = getOrCreatePage('test');
-    saveBlock({ id: 'a', content: 'hello', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'a', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "hello" });
     spy.calls.length = 0; // clear setup calls
 
     beginUndo('split');
-    saveBlock({ ...blockData.value['a'], content: 'hel' });
+    saveBlock(setBlockMarkdown(blockData.value['a'], "- hel"));
     createBlockAfter('a', '- lo');
     commitUndo();
 
@@ -2262,7 +2222,7 @@ describe('batch accumulation', () => {
     const pageId = getOrCreatePage('test');
     spy.calls.length = 0;
 
-    saveBlock({ id: 'x', content: 'direct', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'x', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "direct" });
 
     const puts = spy.calls.filter(c => c.method === 'Put');
     const batches = spy.calls.filter(c => c.method === 'Batch');
@@ -2277,8 +2237,8 @@ describe('batch accumulation', () => {
     await init(spy);
 
     const pageId = getOrCreatePage('doomed');
-    saveBlock({ id: 'd1', content: 'a', pageId, parent: null, order: 0 });
-    saveBlock({ id: 'd2', content: 'b', pageId, parent: null, order: 1 });
+    saveBlock({ id: 'd1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "a" });
+    saveBlock({ id: 'd2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "b" });
     spy.calls.length = 0;
 
     beginUndo('delete page');
@@ -2300,11 +2260,11 @@ describe('batch accumulation', () => {
 
     const pageId = getOrCreatePage('test');
     currentPage.value = pageId;
-    saveBlock({ id: 'u1', content: 'hello', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'u1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "hello" });
 
     // Split block via undo group (creates 2 patches)
     beginUndo('split');
-    saveBlock({ ...blockData.value['u1'], content: 'hel' });
+    saveBlock(setBlockMarkdown(blockData.value['u1'], "- hel"));
     createBlockAfter('u1', '- lo');
     commitUndo();
 
@@ -2328,10 +2288,10 @@ describe('batch accumulation', () => {
 
     const pageId = getOrCreatePage('test');
     currentPage.value = pageId;
-    saveBlock({ id: 'r1', content: 'hello', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'r1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "hello" });
 
     beginUndo('split');
-    saveBlock({ ...blockData.value['r1'], content: 'hel' });
+    saveBlock(setBlockMarkdown(blockData.value['r1'], "- hel"));
     createBlockAfter('r1', '- lo');
     commitUndo();
 
@@ -2365,7 +2325,7 @@ describe('batch accumulation', () => {
 
     // Saving content inside an undo group triggers materializePage
     beginUndo('add content');
-    saveBlock({ ...blockData.value[seedId], content: 'hello world' });
+    saveBlock(setBlockMarkdown(blockData.value[seedId], "- hello world"));
     commitUndo();
 
     const batches = spy.calls.filter(c => c.method === 'Batch');
@@ -2390,7 +2350,7 @@ describe('carryForward', () => {
   });
 
   it('carries forward a single incomplete todo', () => {
-    saveBlock({ id: 's1', content: '- [ ] Fix bug', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "Fix bug", todo: { status: 'todo', syntax: 'checkbox' } });
 
     carryForward('s1', targetId);
 
@@ -2404,7 +2364,7 @@ describe('carryForward', () => {
   });
 
   it('carries forward a keyword todo (TODO, DOING)', () => {
-    saveBlock({ id: 's1', content: '- TODO Write tests', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "Write tests", todo: { status: 'todo', syntax: 'keyword' } });
 
     carryForward('s1', targetId);
 
@@ -2416,9 +2376,9 @@ describe('carryForward', () => {
   });
 
   it('skips complete children, carries incomplete children', () => {
-    saveBlock({ id: 's1', content: '- [ ] Project X', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '- [x] Research', pageId: sourceId, parent: 's1', order: 0 });
-    saveBlock({ id: 's3', content: '[ ] Prototype', pageId: sourceId, parent: 's1', order: 1 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "Project X", todo: { status: 'todo', syntax: 'checkbox' } });
+    saveBlock({ id: 's2', pageId: sourceId, parent: 's1', order: 0, kind: 'bullet', text: "Research", todo: { status: 'done', syntax: 'checkbox' } });
+    saveBlock({ id: 's3', pageId: sourceId, parent: 's1', order: 1, kind: 'bullet', text: "Prototype", todo: { status: 'todo', syntax: 'checkbox' } });
 
     carryForward('s1', targetId);
 
@@ -2441,8 +2401,8 @@ describe('carryForward', () => {
   });
 
   it('prunes entire subtree of a complete block', () => {
-    saveBlock({ id: 's1', content: '[x] Done task', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '- [ ] Leftover subtask', pageId: sourceId, parent: 's1', order: 0 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "Done task", todo: { status: 'done', syntax: 'checkbox' } });
+    saveBlock({ id: 's2', pageId: sourceId, parent: 's1', order: 0, kind: 'bullet', text: "Leftover subtask", todo: { status: 'todo', syntax: 'checkbox' } });
 
     // Carry forward on a complete block should be a no-op
     carryForward('s1', targetId);
@@ -2458,9 +2418,9 @@ describe('carryForward', () => {
   });
 
   it('carries forward non-todo children as context', () => {
-    saveBlock({ id: 's1', content: '- [ ] Fix bug', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '- Repro steps: open settings', pageId: sourceId, parent: 's1', order: 0 });
-    saveBlock({ id: 's3', content: '- [ ] Write fix', pageId: sourceId, parent: 's1', order: 1 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "Fix bug", todo: { status: 'todo', syntax: 'checkbox' } });
+    saveBlock({ id: 's2', pageId: sourceId, parent: 's1', order: 0, kind: 'bullet', text: "Repro steps: open settings" });
+    saveBlock({ id: 's3', pageId: sourceId, parent: 's1', order: 1, kind: 'bullet', text: "Write fix", todo: { status: 'todo', syntax: 'checkbox' } });
 
     carryForward('s1', targetId);
 
@@ -2485,10 +2445,10 @@ describe('carryForward', () => {
   });
 
   it('handles deeply nested incomplete tasks', () => {
-    saveBlock({ id: 's1', content: '[ ] Project', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '[ ] Phase 1', pageId: sourceId, parent: 's1', order: 0 });
-    saveBlock({ id: 's3', content: '[x] Mockup', pageId: sourceId, parent: 's2', order: 0 });
-    saveBlock({ id: 's4', content: '[ ] Implement', pageId: sourceId, parent: 's2', order: 1 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "Project", todo: { status: 'todo', syntax: 'checkbox' } });
+    saveBlock({ id: 's2', pageId: sourceId, parent: 's1', order: 0, kind: 'bullet', text: "Phase 1", todo: { status: 'todo', syntax: 'checkbox' } });
+    saveBlock({ id: 's3', pageId: sourceId, parent: 's2', order: 0, kind: 'bullet', text: "Mockup", todo: { status: 'done', syntax: 'checkbox' } });
+    saveBlock({ id: 's4', pageId: sourceId, parent: 's2', order: 1, kind: 'bullet', text: "Implement", todo: { status: 'todo', syntax: 'checkbox' } });
 
     carryForward('s1', targetId);
 
@@ -2505,9 +2465,9 @@ describe('carryForward', () => {
   });
 
   it('preserves nesting structure on target page', () => {
-    saveBlock({ id: 's1', content: '[ ] Root', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '[ ] Child', pageId: sourceId, parent: 's1', order: 0 });
-    saveBlock({ id: 's3', content: '[ ] Grandchild', pageId: sourceId, parent: 's2', order: 0 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "Root", todo: { status: 'todo', syntax: 'checkbox' } });
+    saveBlock({ id: 's2', pageId: sourceId, parent: 's1', order: 0, kind: 'bullet', text: "Child", todo: { status: 'todo', syntax: 'checkbox' } });
+    saveBlock({ id: 's3', pageId: sourceId, parent: 's2', order: 0, kind: 'bullet', text: "Grandchild", todo: { status: 'todo', syntax: 'checkbox' } });
 
     carryForward('s1', targetId);
 
@@ -2525,7 +2485,7 @@ describe('carryForward', () => {
   });
 
   it('does not double-carry a block already marked with a link', () => {
-    saveBlock({ id: 's1', content: '- [[2026-04-07]] Fix bug', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "[[2026-04-07]] Fix bug" });
 
     carryForward('s1', targetId);
 
@@ -2536,8 +2496,8 @@ describe('carryForward', () => {
   });
 
   it('carries forward into a page that already has blocks', () => {
-    saveBlock({ id: 't1', content: '[ ] Existing task', pageId: targetId, parent: null, order: 0 });
-    saveBlock({ id: 's1', content: '- [ ] New task', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 't1', pageId: targetId, parent: null, order: 0, kind: 'bullet', text: "Existing task", todo: { status: 'todo', syntax: 'checkbox' } });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "New task", todo: { status: 'todo', syntax: 'checkbox' } });
 
     carryForward('s1', targetId);
 
@@ -2554,8 +2514,8 @@ describe('carryForward', () => {
 
   it('whole operation is one undo group', () => {
     currentPage.value = sourceId;
-    saveBlock({ id: 's1', content: '[ ] Task', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '- [ ] Subtask', pageId: sourceId, parent: 's1', order: 0 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "Task", todo: { status: 'todo', syntax: 'checkbox' } });
+    saveBlock({ id: 's2', pageId: sourceId, parent: 's1', order: 0, kind: 'bullet', text: "Subtask", todo: { status: 'todo', syntax: 'checkbox' } });
 
     carryForward('s1', targetId);
 
@@ -2575,9 +2535,9 @@ describe('carryForward', () => {
   });
 
   it('carries forward a non-todo parent that contains incomplete todos', () => {
-    saveBlock({ id: 's1', content: 'Project X', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '- [ ] Task A', pageId: sourceId, parent: 's1', order: 0 });
-    saveBlock({ id: 's3', content: '- [x] Task B', pageId: sourceId, parent: 's1', order: 1 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "Project X" });
+    saveBlock({ id: 's2', pageId: sourceId, parent: 's1', order: 0, kind: 'bullet', text: "Task A", todo: { status: 'todo', syntax: 'checkbox' } });
+    saveBlock({ id: 's3', pageId: sourceId, parent: 's1', order: 1, kind: 'bullet', text: "Task B", todo: { status: 'done', syntax: 'checkbox' } });
 
     carryForward('s1', targetId);
 
@@ -2599,9 +2559,9 @@ describe('carryForward', () => {
   });
 
   it('skips a non-todo parent with no incomplete todo descendants', () => {
-    saveBlock({ id: 's1', content: 'Project X', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '[x] Done', pageId: sourceId, parent: 's1', order: 0 });
-    saveBlock({ id: 's3', content: '- Just a note', pageId: sourceId, parent: 's1', order: 1 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "Project X" });
+    saveBlock({ id: 's2', pageId: sourceId, parent: 's1', order: 0, kind: 'bullet', text: "Done", todo: { status: 'done', syntax: 'checkbox' } });
+    saveBlock({ id: 's3', pageId: sourceId, parent: 's1', order: 1, kind: 'bullet', text: "Just a note" });
 
     carryForward('s1', targetId);
 
@@ -2615,9 +2575,9 @@ describe('carryForward', () => {
   });
 
   it('carries forward non-todo parent with deeply nested incomplete todo', () => {
-    saveBlock({ id: 's1', content: 'Project', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: 'Phase 1', pageId: sourceId, parent: 's1', order: 0 });
-    saveBlock({ id: 's3', content: '[ ] Deep task', pageId: sourceId, parent: 's2', order: 0 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "Project" });
+    saveBlock({ id: 's2', pageId: sourceId, parent: 's1', order: 0, kind: 'bullet', text: "Phase 1" });
+    saveBlock({ id: 's3', pageId: sourceId, parent: 's2', order: 0, kind: 'bullet', text: "Deep task", todo: { status: 'todo', syntax: 'checkbox' } });
 
     carryForward('s1', targetId);
 
@@ -2644,10 +2604,10 @@ describe('carryForwardAll', () => {
     const sourceId = getOrCreatePage('2026-04-07');
     const targetId = getOrCreatePage('2026-04-08');
 
-    saveBlock({ id: 's1', content: '- [ ] Task A', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '- [x] Done B', pageId: sourceId, parent: null, order: 1 });
-    saveBlock({ id: 's3', content: '[ ] Task C', pageId: sourceId, parent: null, order: 2 });
-    saveBlock({ id: 's4', content: '- Plain text', pageId: sourceId, parent: null, order: 3 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "Task A", todo: { status: 'todo', syntax: 'checkbox' } });
+    saveBlock({ id: 's2', pageId: sourceId, parent: null, order: 1, kind: 'bullet', text: "Done B", todo: { status: 'done', syntax: 'checkbox' } });
+    saveBlock({ id: 's3', pageId: sourceId, parent: null, order: 2, kind: 'bullet', text: "Task C", todo: { status: 'todo', syntax: 'checkbox' } });
+    saveBlock({ id: 's4', pageId: sourceId, parent: null, order: 3, kind: 'bullet', text: "Plain text" });
 
     carryForwardAll(sourceId, targetId);
 
@@ -2673,8 +2633,8 @@ describe('carryForwardAll', () => {
     const sourceId = getOrCreatePage('2026-04-07');
     const targetId = getOrCreatePage('2026-04-08');
 
-    saveBlock({ id: 's1', content: '[x] Done', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '- Just text', pageId: sourceId, parent: null, order: 1 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "Done", todo: { status: 'done', syntax: 'checkbox' } });
+    saveBlock({ id: 's2', pageId: sourceId, parent: null, order: 1, kind: 'bullet', text: "Just text" });
 
     carryForwardAll(sourceId, targetId);
 
@@ -2690,8 +2650,8 @@ describe('carryForwardAll', () => {
     const targetId = getOrCreatePage('2026-04-08');
     currentPage.value = sourceId;
 
-    saveBlock({ id: 's1', content: '[ ] A', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '- [ ] B', pageId: sourceId, parent: null, order: 1 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "A", todo: { status: 'todo', syntax: 'checkbox' } });
+    saveBlock({ id: 's2', pageId: sourceId, parent: null, order: 1, kind: 'bullet', text: "B", todo: { status: 'todo', syntax: 'checkbox' } });
 
     carryForwardAll(sourceId, targetId);
 
@@ -2710,9 +2670,9 @@ describe('carryForwardAll', () => {
     const sourceId = getOrCreatePage('2026-04-07');
     const targetId = getOrCreatePage('2026-04-08');
 
-    saveBlock({ id: 's1', content: '[ ] Flat todo', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: 'Project X', pageId: sourceId, parent: null, order: 1 });
-    saveBlock({ id: 's3', content: '[ ] Nested todo', pageId: sourceId, parent: 's2', order: 0 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "Flat todo", todo: { status: 'todo', syntax: 'checkbox' } });
+    saveBlock({ id: 's2', pageId: sourceId, parent: null, order: 1, kind: 'bullet', text: "Project X" });
+    saveBlock({ id: 's3', pageId: sourceId, parent: 's2', order: 0, kind: 'bullet', text: "Nested todo", todo: { status: 'todo', syntax: 'checkbox' } });
 
     carryForwardAll(sourceId, targetId);
 
@@ -2747,7 +2707,7 @@ describe('carryForward edge cases', () => {
   });
 
   it('is a no-op when carrying forward to the same page', () => {
-    saveBlock({ id: 's1', content: '[ ] Task', pageId: sourceId, parent: null, order: 0 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "Task", todo: { status: 'todo', syntax: 'checkbox' } });
 
     carryForward('s1', sourceId);
 
@@ -2759,8 +2719,8 @@ describe('carryForward edge cases', () => {
   });
 
   it('carries forward DOING and WAIT statuses', () => {
-    saveBlock({ id: 's1', content: '- DOING In progress', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: '- WAIT Blocked', pageId: sourceId, parent: null, order: 1 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "In progress", todo: { status: 'doing', syntax: 'keyword' } });
+    saveBlock({ id: 's2', pageId: sourceId, parent: null, order: 1, kind: 'bullet', text: "Blocked", todo: { status: 'wait', syntax: 'keyword' } });
 
     carryForward('s1', targetId);
     carryForward('s2', targetId);
@@ -2779,11 +2739,11 @@ describe('carryForward edge cases', () => {
   });
 
   it('handles interleaved complete, non-todo, and incomplete children', () => {
-    saveBlock({ id: 's1', content: '[ ] Task', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: 'notes A', pageId: sourceId, parent: 's1', order: 0 });
-    saveBlock({ id: 's3', content: '[x] Done step', pageId: sourceId, parent: 's1', order: 1 });
-    saveBlock({ id: 's4', content: 'notes B', pageId: sourceId, parent: 's1', order: 2 });
-    saveBlock({ id: 's5', content: '[ ] Pending', pageId: sourceId, parent: 's1', order: 3 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "Task", todo: { status: 'todo', syntax: 'checkbox' } });
+    saveBlock({ id: 's2', pageId: sourceId, parent: 's1', order: 0, kind: 'bullet', text: "notes A" });
+    saveBlock({ id: 's3', pageId: sourceId, parent: 's1', order: 1, kind: 'bullet', text: "Done step", todo: { status: 'done', syntax: 'checkbox' } });
+    saveBlock({ id: 's4', pageId: sourceId, parent: 's1', order: 2, kind: 'bullet', text: "notes B" });
+    saveBlock({ id: 's5', pageId: sourceId, parent: 's1', order: 3, kind: 'bullet', text: "Pending", todo: { status: 'todo', syntax: 'checkbox' } });
 
     carryForward('s1', targetId);
 
@@ -2807,10 +2767,10 @@ describe('carryForward edge cases', () => {
   });
 
   it('reparents complete children when non-todo intermediate is deleted', () => {
-    saveBlock({ id: 's1', content: '[ ] Root', pageId: sourceId, parent: null, order: 0 });
-    saveBlock({ id: 's2', content: 'Phase 1', pageId: sourceId, parent: 's1', order: 0 });
-    saveBlock({ id: 's3', content: '[x] Done thing', pageId: sourceId, parent: 's2', order: 0 });
-    saveBlock({ id: 's4', content: '[ ] Pending thing', pageId: sourceId, parent: 's2', order: 1 });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'bullet', text: "Root", todo: { status: 'todo', syntax: 'checkbox' } });
+    saveBlock({ id: 's2', pageId: sourceId, parent: 's1', order: 0, kind: 'bullet', text: "Phase 1" });
+    saveBlock({ id: 's3', pageId: sourceId, parent: 's2', order: 0, kind: 'bullet', text: "Done thing", todo: { status: 'done', syntax: 'checkbox' } });
+    saveBlock({ id: 's4', pageId: sourceId, parent: 's2', order: 1, kind: 'bullet', text: "Pending thing", todo: { status: 'todo', syntax: 'checkbox' } });
 
     carryForward('s1', targetId);
 
@@ -2832,7 +2792,7 @@ describe('carryForward edge cases', () => {
   });
 
   it('preserves block kind on copy (content stays bare for paragraph-style todos)', () => {
-    saveBlock({ id: 's1', content: '[ ] Task', pageId: sourceId, parent: null, order: 0, type: 'paragraph' });
+    saveBlock({ id: 's1', pageId: sourceId, parent: null, order: 0, kind: 'paragraph', text: "[ ] Task" });
 
     carryForward('s1', targetId);
 
@@ -2922,7 +2882,7 @@ describe('page dedup on watch', () => {
     await init(store);
 
     const pageId = getOrCreatePage('My Page');
-    saveBlock({ id: 'b1', content: '- hello', pageId, parent: null, order: 0 });
+    saveBlock({ id: 'b1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "hello" });
 
     // Simulate another device creating the same page with a different UUID
     const dupPage = { title: 'My Page', slug: 'my-page', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };

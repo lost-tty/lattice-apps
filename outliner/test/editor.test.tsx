@@ -4,31 +4,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render } from 'preact';
 import { createMockStore } from '../src/mock-sdk';
 import {
-  init, reset, getOrCreatePage, saveBlock as _rawSaveBlock, blockData,
+  init, reset, getOrCreatePage, saveBlock, setBlockMarkdown, blockData,
   activeBlockId, currentPage,
 } from '../src/db';
-
 import { parseStoredBlock } from '../src/parse';
-
-/** Test-only wrapper: pre-v2 fixtures get migrated inline so tests keep
- *  working. See the identical wrapper in test/db.test.ts for rationale. */
-function saveBlock(block: any) {
-  const { id, type, content = '', layout, ...rest } = block;
-  let storedContent = content;
-  let storedLayout = layout;
-  if (type === 'table') {
-    storedContent = '';
-    storedLayout = 'grid';
-  } else if (type === 'paragraph') {
-    // bare content
-  } else {
-    const alreadyMigrated =
-      content === '' || content === '- ' || content.startsWith('- ') ||
-      /^#{1,6} /.test(content) || content === '---';
-    storedContent = alreadyMigrated ? content : '- ' + content;
-  }
-  return _rawSaveBlock(parseStoredBlock({ ...rest, content: storedContent, layout: storedLayout }, id));
-}
 import { createBlockAfter, joinBlockWithPrevious } from '../src/blockOps';
 import { continuationContent } from '../src/editorState';
 import { Editor } from '../src/Editor';
@@ -56,7 +35,7 @@ afterEach(() => {
 describe('Editor focus', () => {
   it('handleBlur does not trigger redundant saves after Enter', async () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'hello world', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "hello world" });
     currentPage.value = pageId;
     activeBlockId.value = '1';
 
@@ -69,7 +48,7 @@ describe('Editor focus', () => {
 
     // Simulate Enter: save before, create new block, switch active
     editDiv.textContent = '- hello';
-    saveBlock({ ...blockData.value['1'], content: 'hello' });
+    saveBlock(setBlockMarkdown(blockData.value['1'], "- hello"));
     const newId = createBlockAfter('1', ' world');
     activeBlockId.value = newId;
 
@@ -89,8 +68,8 @@ describe('Editor focus', () => {
 
   it('merged block shows joined content after backspace join', async () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'hello', pageId, parent: null, order: 0 });
-    saveBlock({ id: '2', content: 'world', pageId, parent: null, order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "hello" });
+    saveBlock({ id: '2', pageId: pageId, parent: null, order: 1, kind: 'bullet', text: "world" });
     currentPage.value = pageId;
     activeBlockId.value = '2';
 
@@ -101,7 +80,7 @@ describe('Editor focus', () => {
     expect(editDiv).not.toBeNull();
     expect(editDiv.textContent).toBe('- world');
 
-    saveBlock({ ...blockData.value['2'], content: 'world' });
+    saveBlock(setBlockMarkdown(blockData.value['2'], "- world"));
     const joined = joinBlockWithPrevious('2', 'world');
     expect(joined).not.toBeNull();
     expect(joined!.prevId).toBe('1');
@@ -120,7 +99,7 @@ describe('Editor focus', () => {
 
   it('new block receives focus after Enter split', async () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: 'hello world', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "hello world" });
     currentPage.value = pageId;
     activeBlockId.value = '1';
 
@@ -132,7 +111,7 @@ describe('Editor focus', () => {
 
     // Simulate Enter at offset 7 (after "- hello"): new block gets bullet + space + "world".
     editDiv.textContent = '- hello';
-    saveBlock({ ...blockData.value['1'], content: 'hello' });
+    saveBlock(setBlockMarkdown(blockData.value['1'], "- hello"));
     const newId = createBlockAfter('1', '-  world');
     activeBlockId.value = newId;
 
@@ -211,7 +190,7 @@ describe('continuationContent', () => {
 describe('Continuation template', () => {
   it('checkbox block generates "- [ ] " template on Enter at end', async () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '[ ] Item', pageId, parent: null, order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'bullet', text: "Item", todo: { status: 'todo', syntax: 'checkbox' } });
     currentPage.value = pageId;
     activeBlockId.value = '1';
 
@@ -239,9 +218,9 @@ describe('Continuation template', () => {
 describe('Heading visual depth', () => {
   it('heading children render at the same visual depth as the heading', async () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
-    saveBlock({ id: '2', content: 'item A', pageId, parent: '1', order: 0 });
-    saveBlock({ id: '3', content: 'item B', pageId, parent: '1', order: 1 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'heading', text: "Section", level: 1 });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "item A" });
+    saveBlock({ id: '3', pageId: pageId, parent: '1', order: 1, kind: 'bullet', text: "item B" });
     currentPage.value = pageId;
 
     render(<Editor />, container);
@@ -257,9 +236,9 @@ describe('Heading visual depth', () => {
 
   it('nested bullets under a heading child retain relative indentation', async () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '# Section', pageId, parent: null, order: 0, type: 'paragraph' });
-    saveBlock({ id: '2', content: 'parent', pageId, parent: '1', order: 0 });
-    saveBlock({ id: '3', content: 'child', pageId, parent: '2', order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'heading', text: "Section", level: 1 });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'bullet', text: "parent" });
+    saveBlock({ id: '3', pageId: pageId, parent: '2', order: 0, kind: 'bullet', text: "child" });
     currentPage.value = pageId;
 
     render(<Editor />, container);
@@ -275,9 +254,9 @@ describe('Heading visual depth', () => {
 
   it('nested headings each absorb a depth level', async () => {
     const pageId = getOrCreatePage('p');
-    saveBlock({ id: '1', content: '# Top', pageId, parent: null, order: 0, type: 'paragraph' });
-    saveBlock({ id: '2', content: '## Sub', pageId, parent: '1', order: 0, type: 'paragraph' });
-    saveBlock({ id: '3', content: 'item', pageId, parent: '2', order: 0 });
+    saveBlock({ id: '1', pageId: pageId, parent: null, order: 0, kind: 'heading', text: "Top", level: 1 });
+    saveBlock({ id: '2', pageId: pageId, parent: '1', order: 0, kind: 'heading', text: "Sub", level: 2 });
+    saveBlock({ id: '3', pageId: pageId, parent: '2', order: 0, kind: 'bullet', text: "item" });
     currentPage.value = pageId;
 
     render(<Editor />, container);
