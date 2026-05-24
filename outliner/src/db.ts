@@ -14,6 +14,10 @@ const encode = (s: string) => new TextEncoder().encode(s);
 const decode = (b: Uint8Array) => new TextDecoder().decode(b);
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+function listValue(e: { entries: { value: Uint8Array }[] }): Uint8Array | null {
+  return e.entries[0]?.value ?? null;
+}
+
 // --- Reactive state ---
 
 let store: Store;
@@ -115,16 +119,20 @@ export async function init(s: Store) {
   const pages: Record<string, Page> = {};
   for (const e of (await store.List({ prefix: encode('page/') })).items) {
     try {
+      const value = listValue(e);
+      if (!value) continue;
       const id = decode(e.key).slice(5); // 'page/'.length === 5
-      pages[id] = { id, ...JSON.parse(decode(e.value)) };
+      pages[id] = { id, ...JSON.parse(decode(value)) };
     } catch (err) { console.warn('[outliner] bad page:', err); }
   }
 
   const blocks: Record<string, Block> = {};
   for (const e of (await store.List({ prefix: encode('block/') })).items) {
     try {
+      const value = listValue(e);
+      if (!value) continue;
       const id = decode(e.key).slice(6); // 'block/'.length === 6
-      blocks[id] = parseStoredBlock(normalizeStored(JSON.parse(decode(e.value))), id);
+      blocks[id] = parseStoredBlock(normalizeStored(JSON.parse(decode(value))), id);
     } catch (err) { console.warn('[outliner] bad block:', err); }
   }
 

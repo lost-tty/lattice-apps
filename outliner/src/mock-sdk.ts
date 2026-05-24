@@ -20,14 +20,19 @@ export function createMockStore(): Store {
   return {
     async List({ prefix }) {
       const p = decode(prefix);
-      const items: { key: Uint8Array; value: Uint8Array }[] = [];
+      const items: { key: Uint8Array; entries: { value: Uint8Array }[] }[] = [];
       for (const [k, v] of data) {
-        if (k.startsWith(p)) items.push({ key: encode(k), value: v });
+        if (k.startsWith(p)) items.push({ key: encode(k), entries: [{ value: v }] });
       }
       return { items };
     },
 
     async Get({ key }) {
+      const value = data.get(decode(key));
+      return { entries: value ? [{ value }] : [] };
+    },
+
+    async GetLww({ key }) {
       return { value: data.get(decode(key)) ?? null };
     },
 

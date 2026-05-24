@@ -4,9 +4,13 @@ export type StoreOp =
   | { put: { key: Uint8Array; value: Uint8Array } }
   | { delete: { key: Uint8Array } };
 
+export type ProjectedEntry = { value: Uint8Array; timestamp?: unknown; author?: Uint8Array };
+export type KeyEntry = { key: Uint8Array; entries: ProjectedEntry[] };
+
 export interface Store {
-  List(p: { prefix: Uint8Array }): Promise<{ items: { key: Uint8Array; value: Uint8Array }[] }>;
-  Get(p: { key: Uint8Array }): Promise<{ value: Uint8Array | null }>;
+  List(p: { prefix: Uint8Array }): Promise<{ items: KeyEntry[] }>;
+  Get(p: { key: Uint8Array }): Promise<{ entries: ProjectedEntry[] }>;
+  GetLww(p: { key: Uint8Array }): Promise<{ value: Uint8Array | null }>;
   Put(p: { key: Uint8Array; value: Uint8Array }): Promise<void>;
   Delete(p: { key: Uint8Array }): Promise<void>;
   Batch(p: { ops: StoreOp[] }): Promise<void>;

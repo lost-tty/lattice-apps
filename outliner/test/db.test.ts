@@ -49,7 +49,7 @@ describe('mock store', () => {
     await store.Put({ key: encode('a'), value: encode('1') });
     await store.Put({ key: encode('b'), value: encode('2') });
 
-    const { value } = await store.Get({ key: encode('a') });
+    const { value } = await store.GetLww({ key: encode('a') });
     expect(decode(value!)).toBe('1');
 
     const resp = await store.List({ prefix: encode('') });
@@ -57,7 +57,7 @@ describe('mock store', () => {
     expect(items.length).toBe(2);
 
     await store.Delete({ key: encode('a') });
-    const { value: gone } = await store.Get({ key: encode('a') });
+    const { value: gone } = await store.GetLww({ key: encode('a') });
     expect(gone).toBeNull();
   });
 
@@ -1561,12 +1561,12 @@ describe('navigateTo', () => {
     // Should be in pageData (visible in UI)
     expect(pageData.value[pageId]).toBeDefined();
     // But NOT in the store
-    const storeVal = await store.Get({ key: encode('page/' + pageId) });
+    const storeVal = await store.GetLww({ key: encode('page/' + pageId) });
     expect(storeVal.value).toBeNull();
     // Block should also not be in the store
     const blocks = Object.values(blockData.value).filter(b => b.pageId === pageId);
     expect(blocks.length).toBe(1);
-    const blockVal = await store.Get({ key: encode('block/' + blocks[0].id) });
+    const blockVal = await store.GetLww({ key: encode('block/' + blocks[0].id) });
     expect(blockVal.value).toBeNull();
   });
 
@@ -1584,9 +1584,9 @@ describe('navigateTo', () => {
 
     // Page should now be persisted
     expect(isTentativePage(pageId)).toBe(false);
-    const storeVal = await store.Get({ key: encode('page/' + pageId) });
+    const storeVal = await store.GetLww({ key: encode('page/' + pageId) });
     expect(storeVal.value).not.toBeNull();
-    const blockVal = await store.Get({ key: encode('block/' + blocks[0].id) });
+    const blockVal = await store.GetLww({ key: encode('block/' + blocks[0].id) });
     expect(blockVal.value).not.toBeNull();
   });
 
@@ -2181,6 +2181,7 @@ describe('batch accumulation', () => {
       calls,
       List: (p) => inner.List(p),
       Get: (p) => inner.Get(p),
+      GetLww: (p) => inner.GetLww(p),
       Put: (p) => { calls.push({ method: 'Put' }); return inner.Put(p); },
       Delete: (p) => { calls.push({ method: 'Delete' }); return inner.Delete(p); },
       Batch: (p) => { calls.push({ method: 'Batch', count: p.ops.length }); return inner.Batch(p); },

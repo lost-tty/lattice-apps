@@ -6,8 +6,9 @@
 
 export interface Store {
   readonly storeId: string;
-  List(params: { prefix: Uint8Array }): Promise<any>;
-  Get(params: { key: Uint8Array }): Promise<{ value: Uint8Array | null }>;
+  List(params: { prefix: Uint8Array }): Promise<{ items: { key: Uint8Array; entries: { value: Uint8Array; timestamp?: unknown; author?: Uint8Array }[] }[] }>;
+  Get(params: { key: Uint8Array }): Promise<{ entries: { value: Uint8Array; timestamp?: unknown; author?: Uint8Array }[] }>;
+  GetLww(params: { key: Uint8Array }): Promise<{ value: Uint8Array | null }>;
   Put(params: { key: Uint8Array; value: Uint8Array }): Promise<void>;
   Delete(params: { key: Uint8Array }): Promise<void>;
   subscribe(

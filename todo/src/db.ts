@@ -11,6 +11,10 @@ const enc = new TextEncoder();
 const encode = (s: string): Uint8Array => enc.encode(s);
 const decode = (b: Uint8Array): string => new TextDecoder().decode(b);
 
+function listValue(e: { entries: { value: Uint8Array }[] }): Uint8Array | null {
+  return e.entries[0]?.value ?? null;
+}
+
 // --- Key prefixes ---
 
 const PREFIX = {
@@ -53,10 +57,12 @@ class EntityCollection<T extends { id: string }> {
     this.store = store;
     const entries = (await store.List({ prefix: encode(this.prefix) })).items;
     for (const e of entries) {
+      const value = listValue(e);
+      if (!value) continue;
       const key = decode(e.key);
       const id = key.slice(this.prefix.length);
       try {
-        const data = JSON.parse(decode(e.value));
+        const data = JSON.parse(decode(value));
         if (data && typeof data === 'object') {
           this.items.set(id, { id, ...data } as T);
         }
@@ -158,6 +164,8 @@ export class AppStore {
     if (entries.length === 0) return;
 
     for (const e of entries) {
+      const value = listValue(e);
+      if (!value) continue;
       const key = decode(e.key);
       const id = key.slice(LEGACY_PREFIX.length);
 
@@ -168,7 +176,7 @@ export class AppStore {
       }
 
       try {
-        const old = JSON.parse(decode(e.value));
+        const old = JSON.parse(decode(value));
         if (!old || typeof old !== 'object') continue;
 
         // Convert Todo → Task

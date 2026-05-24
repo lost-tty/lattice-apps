@@ -29,19 +29,24 @@ function createLocalStore(): Store {
   return {
     async List({ prefix }) {
       const p = decode(prefix);
-      const items: { key: Uint8Array; value: Uint8Array }[] = [];
+      const items: { key: Uint8Array; entries: { value: Uint8Array }[] }[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const storageKey = localStorage.key(i)!;
         if (!storageKey.startsWith(PREFIX)) continue;
         const key = storageKey.slice(PREFIX.length);
         if (key.startsWith(p)) {
-          items.push({ key: encode(key), value: encode(localStorage.getItem(storageKey)!) });
+          items.push({ key: encode(key), entries: [{ value: encode(localStorage.getItem(storageKey)!) }] });
         }
       }
       return { items };
     },
 
     async Get({ key }) {
+      const val = localStorage.getItem(PREFIX + decode(key));
+      return { entries: val ? [{ value: encode(val) }] : [] };
+    },
+
+    async GetLww({ key }) {
       const val = localStorage.getItem(PREFIX + decode(key));
       return { value: val ? encode(val) : null };
     },

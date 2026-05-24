@@ -8,7 +8,7 @@ import { signal, computed, type Signal } from '@preact/signals';
 // --- Lattice SDK types ---
 
 interface Store {
-  List(p: { prefix: Uint8Array }): Promise<unknown>;
+  List(p: { prefix: Uint8Array }): Promise<{ items: { key: Uint8Array; entries: { value: Uint8Array; timestamp?: unknown; author?: Uint8Array }[] }[] }>;
   Put(p: { key: Uint8Array; value: Uint8Array }): Promise<void>;
   Delete(p: { key: Uint8Array }): Promise<void>;
   subscribe(stream: string, p: { prefix: Uint8Array }, cb: (e: WatchEvent) => void): () => void;
@@ -23,6 +23,9 @@ declare const LatticeSDK: { connect(): Promise<{ openAppStore(): Promise<Store> 
 const encode = (s: string) => new TextEncoder().encode(s);
 const decode = (b: Uint8Array) => new TextDecoder().decode(b);
 
+function listValue(e: { entries: { value: Uint8Array }[] }): Uint8Array | null {
+  return e.entries[0]?.value ?? null;
+}
 
 // --- Data types ---
 
@@ -195,7 +198,12 @@ async function main() {
     // Load columns
     const cols: Record<string, Col> = {};
     for (const e of (await store.List({ prefix: encode('col/') })).items) {
-      try { const id = decode(e.key).slice(4); cols[id] = { id, ...JSON.parse(decode(e.value)) }; }
+      try {
+        const value = listValue(e);
+        if (!value) continue;
+        const id = decode(e.key).slice(4);
+        cols[id] = { id, ...JSON.parse(decode(value)) };
+      }
       catch (err) { console.warn('[kanban] bad column:', err); }
     }
     colData.value = cols;
@@ -206,7 +214,12 @@ async function main() {
     // Load cards
     const cards: Record<string, Card> = {};
     for (const e of (await store.List({ prefix: encode('card/') })).items) {
-      try { const id = decode(e.key).slice(5); cards[id] = { id, ...JSON.parse(decode(e.value)) }; }
+      try {
+        const value = listValue(e);
+        if (!value) continue;
+        const id = decode(e.key).slice(5);
+        cards[id] = { id, ...JSON.parse(decode(value)) };
+      }
       catch (err) { console.warn('[kanban] bad card:', err); }
     }
     cardData.value = cards;

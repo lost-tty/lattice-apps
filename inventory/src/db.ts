@@ -22,6 +22,9 @@ const enc = new TextEncoder();
 const encode = (s: string): Uint8Array => enc.encode(s);
 const decode = (b: Uint8Array): string => new TextDecoder().decode(b);
 
+function listValue(e: { entries: { value: Uint8Array }[] }): Uint8Array | null {
+  return e.entries[0]?.value ?? null;
+}
 
 // --- DataStore ---
 
@@ -52,10 +55,12 @@ export class DataStore {
       const newItems = new Map<string, Item>();
 
       for (const e of entries) {
+        const value = listValue(e);
+        if (!value) continue;
         const key = decode(e.key);
         const id = key.startsWith(KEY_PREFIX) ? key.slice(KEY_PREFIX.length) : key;
         try {
-          const fields = JSON.parse(decode(e.value));
+          const fields = JSON.parse(decode(value));
           if (typeof fields === 'object' && fields !== null) {
             delete fields.id;  // strip legacy id field (id comes from KV key)
             const item = { [ID]: id, ...fields } as Item;
@@ -218,7 +223,7 @@ export class DataStore {
 
     if (!this.store) return null;
     try {
-      const { value: raw } = await this.store.Get({ key: encode(PREFS_KEY) });
+      const { value: raw } = await this.store.GetLww({ key: encode(PREFS_KEY) });
       if (raw) {
         const value = JSON.parse(decode(raw));
         if (value && typeof value === 'object') {
